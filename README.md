@@ -39,7 +39,11 @@ How to build?
 gcc scaled_dot_product_attention.c -o out/scaled_dot_product_attention
 How to run?
 ./out/scaled_dot_product_attention
-
+How to test the tokenizer client server?
+Run the server (python)
+python tokenizer
+Run the client (c)
+./out/tokenizer
 
 
 
