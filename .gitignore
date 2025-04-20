@@ -1,0 +1,4 @@
+transformers/models/gpt2/*
+!transformers/models/gpt2/.gitkeep
+out/*
+transformers_env/
