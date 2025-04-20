@@ -100,6 +100,14 @@ void layernorm_2d(double *a, int a_r, int a_c,
     }
 }
 
+void add_2d(double *a, int a_r, int a_c, double *b, double *out){
+    for (int i=0; i<a_r; i++){
+        for (int j=0; j<a_c; j++){
+            *(out +i*a_c + j) = *(a +i*a_c + j) + *(b +i*a_c + j);
+        }
+    }
+
+}
 
 double mean_(double *x, int len){
     double sum = 0.0;
@@ -138,6 +146,7 @@ double attention_weights[ctx_len][ctx_len] = {};
 double context[ctx_len][d_model] = {};
 double layer_norm1_gamma[d_model] = {}; // default: no scaling
 double layer_norm2_beta[d_model] = {};  // default: no shifting
+double residual_out[ctx_len][d_model] = {};
 
 int main()
 {
@@ -161,13 +170,13 @@ int main()
     dot_2d(&attention_weights[0][0],ctx_len,ctx_len,&V[0][0],ctx_len,d_model,&context[0][0],!APPLY_ATTENTION_SCALING);
     //print_2d_tensor(&context[0][0],ctx_len,d_model);
 
+    add_2d(&embeddings[0][0],ctx_len,d_model,&context[0][0],&residual_out[0][0]);
+
     
     clock_gettime(CLOCK_MONOTONIC, &end);
     double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
     printf("GPT2 Inference - End\n");
     printf("Inference time =  %.2f seconds\n",elapsed);
-
-    //add_2d()...
 
     return 1;
 }
