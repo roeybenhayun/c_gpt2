@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdio.h>
+#include <time.h>
 
 #define APPLY_ATTENTION_SCALING (1)
 void print_2d_tensor(double *a, int a_r, int a_c);
@@ -55,7 +56,7 @@ double dot_2d(double *a,int a_r, int a_c, double*b,int b_r,int b_c,double* c_out
             dot_product = 0.0;
         }
     }
-    printf("dot_2d_product = %.17f\n",dot_product_sum);
+    //printf("dot_2d_product = %.17f\n",dot_product_sum);
     return dot_product_sum;
 }
 
@@ -116,45 +117,55 @@ double variance_(double *x,int len, double mean){
 }
 
 
+const int d_model = 768;
+const int ctx_len = 1024;
+const double eps = 0.000005;
+struct timespec start,end;
+
+// TODO: Tokenizer block
+// TODO: Positional Embeddings
+double embeddings[ctx_len][d_model] = {}; // for now post positional embeddings. This would go into layer norm
+double X_norm[ctx_len][d_model] = {};
+double W_q[d_model][d_model] = {}; // learnable
+double W_k[d_model][d_model] = {}; // learnable
+double W_v[d_model][d_model] = {}; // learnable
+double Q[ctx_len][d_model] = {};
+double K[ctx_len][d_model] = {};
+double K_T[d_model][ctx_len] = {};
+double V[ctx_len][d_model] = {};
+double attention_scores[ctx_len][ctx_len] = {};
+double attention_weights[ctx_len][ctx_len] = {};
+double context[ctx_len][d_model] = {};
+double layer_norm1_gamma[d_model] = {}; // default: no scaling
+double layer_norm2_beta[d_model] = {};  // default: no shifting
 
 int main()
 {
-    double attention_scores[3][3] = {};
-    double attention_weights[3][3] = {};
-    double context[3][4] = {};
-    double K_T[4][3] = {};
-    double layer_norm1_gamma[3] = {1,1,1}; // default: no scaling
-    double layer_norm2_beta[3] = {0,0,0};  // default: no shifting
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    printf("GPT2 Inference - Start\n");
+    layernorm_2d(&embeddings[0][0],ctx_len,d_model,&layer_norm1_gamma[0],&layer_norm2_beta[0], &X_norm[0][0],eps);
+    dot_2d(&X_norm[0][0],ctx_len,d_model,&W_q[0][0],d_model,d_model,&Q[0][0],!APPLY_ATTENTION_SCALING);
+    dot_2d(&X_norm[0][0],ctx_len,d_model,&W_k[0][0],d_model,d_model,&K[0][0],!APPLY_ATTENTION_SCALING);
+    dot_2d(&X_norm[0][0],ctx_len,d_model,&W_v[0][0],d_model,d_model,&V[0][0],!APPLY_ATTENTION_SCALING);
 
-    double Q[3][4] = {
-        {1.2,   2.3,    3,  4.9 },
-        {1.2,   2.3,    3,  4   },
-        {1.2,   2.3,    3,  4.9 }
-    }; //3x4
-    double K[3][4] = {
-        {0.3,   0.9,    1.1,    1.2 },
-        {0.4,   0.9,    1.1,    1.3 },
-        {0.5,   0.9,    1.1,    1.5 }
-    }; //3x4
 
-    double V[3][4] = {
-        {0.3,   0.9,    1.1,    0.4 },
-        {0.4,   0.9,    1.1,    1.2 },
-        {0.5,   0.9,    1.1,    0.1 }        
-    }; //3x4
+    transpose_2d(&K[0][0], ctx_len,d_model , &K_T[0][0]);
+    //print_2d_tensor(&K_T[0][0],d_model,ctx_len);
 
-    //layernorm_2d()...
-    transpose_2d(&K[0][0], 3,4 , &K_T[0][0]);
-    print_2d_tensor(&K_T[0][0],4,3);
-
-    dot_2d(&Q[0][0],3,4,&K_T[0][0],4,3,&attention_scores[0][0],APPLY_ATTENTION_SCALING);
-    print_2d_tensor(&attention_scores[0][0],3,3);
+    dot_2d(&Q[0][0],ctx_len,d_model,&K_T[0][0],d_model,ctx_len,&attention_scores[0][0],APPLY_ATTENTION_SCALING);
+    //print_2d_tensor(&attention_scores[0][0],ctx_len,ctx_len);
     
-    softmax_2d(&attention_scores[0][0], 3,3,&attention_weights[0][0]);
-    print_2d_tensor(&attention_weights[0][0],3,3);
+    softmax_2d(&attention_scores[0][0], ctx_len,ctx_len,&attention_weights[0][0]);
+    //print_2d_tensor(&attention_weights[0][0],ctx_len,ctx_len);
     
-    dot_2d(&attention_weights[0][0],3,3,&V[0][0],3,4,&context[0][0],!APPLY_ATTENTION_SCALING);
-    print_2d_tensor(&context[0][0],3,4);
+    dot_2d(&attention_weights[0][0],ctx_len,ctx_len,&V[0][0],ctx_len,d_model,&context[0][0],!APPLY_ATTENTION_SCALING);
+    //print_2d_tensor(&context[0][0],ctx_len,d_model);
+
+    
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+    printf("GPT2 Inference - End\n");
+    printf("Inference time =  %.2f seconds\n",elapsed);
 
     //add_2d()...
 
