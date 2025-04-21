@@ -8,6 +8,14 @@ double gelu(double x){
     return 0.5 * x * (1 + tanh (term * (x + 0.044715*pow(x,3))));
 }
 
+void gelu_2d(double *a,int a_c, int a_r, double *out){
+    for (int i=0; i<a_r; i++){
+        for (int j=0; j<a_c; j++){
+            *(out +i*a_c + j) = gelu(*(a +i*a_c + j));
+        }
+    }
+}
+
 int main()
 {
     double in = 1.23;

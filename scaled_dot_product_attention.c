@@ -3,6 +3,8 @@
 #include <time.h>
 
 #define APPLY_ATTENTION_SCALING (1)
+#define PI (3.14159265358979323846)
+
 void print_2d_tensor(double *a, int a_r, int a_c);
 double mean_(double *x, int len);
 double variance_(double *x,int len, double mean);
@@ -10,6 +12,9 @@ void softmax_2d(double *a, int a_r, int a_c, double * c_out);
 double dot_2d(double *a,int a_r, int a_c, double*b,int b_r,int b_c,double* c_out,int apply_attention_scaling );
 void transpose_2d(double *a, int a_r, int a_c, double*b);
 void layernorm_2d(double *a, int a_r, int a_c,double * ln_gamma, double * ln_beta,double * out, double epsilon);
+double gelu(double x);
+void gelu_2d(double *a,int a_c, int a_r, double *out);
+
 
 // TODO 
 // * Numerical stability - substract the row's max is the standard trick
@@ -106,7 +111,19 @@ void add_2d(double *a, int a_r, int a_c, double *b, double *out){
             *(out +i*a_c + j) = *(a +i*a_c + j) + *(b +i*a_c + j);
         }
     }
+}
 
+// if out is null addition is inplace 
+void add_bias_2d(double *a, int a_r, int a_c, double *b, double *out){
+    double * tmp = out;
+    if (out == NULL){ //inplace
+        tmp = a;
+    } 
+    for (int i=0; i<a_r; i++){
+        for (int j=0; j<a_c; j++){
+            *(tmp +i*a_c + j) = *(a +i*a_c + j) + *(b + j);
+        }
+    }
 }
 
 double mean_(double *x, int len){
@@ -124,7 +141,25 @@ double variance_(double *x,int len, double mean){
     return (sum/(double)len);
 }
 
+double gelu(double x){
+    double term = sqrt(2.0/PI);
+    return 0.5 * x * (1 + tanh (term * (x + 0.044715*pow(x,3))));
+}
 
+void gelu_2d(double *a,int a_c, int a_r, double *out){
+    double * tmp = out;
+    if (out == NULL){ //inplace
+        tmp = a;
+    } 
+    for (int i=0; i<a_r; i++){
+        for (int j=0; j<a_c; j++){
+            *(tmp +i*a_c + j) = gelu(*(a +i*a_c + j));
+        }
+    }
+}
+
+
+// GPT2 small
 const int d_model = 768;
 const int ctx_len = 1024;
 const double eps = 0.000005;
@@ -136,6 +171,16 @@ double embeddings[ctx_len][d_model] = {}; // for now post positional embeddings.
 
 double X_norm[ctx_len][d_model] = {};
 double X_norm2[ctx_len][d_model] = {};
+
+double W1[d_model][d_model*4] = {};
+double b1[d_model*4] = {};
+double X1[ctx_len][d_model*4] = {};
+double X1_out[ctx_len][d_model*4] = {};
+double W2[d_model*4][d_model] = {};
+double b2[d_model] = {};
+double X2[ctx_len][d_model] = {};
+double X2_out[ctx_len][d_model] = {};
+double Xf_out[ctx_len][d_model] = {};
 
 double W_q[d_model][d_model] = {}; // learnable
 double W_k[d_model][d_model] = {}; // learnable
@@ -156,13 +201,15 @@ double layer_normf_gamma[d_model] = {}; // default: no scaling
 double layer_normf_beta[d_model] = {};  // default: no shifting
 
 double residual_out[ctx_len][d_model] = {};
+double residual2_out[ctx_len][d_model] = {};
 
 int main()
 {
     clock_gettime(CLOCK_MONOTONIC, &start);
     printf("GPT2 Inference - Start\n");
     
-    // TODO - Tokenizer
+    // Get user input 
+    // TODO - Tokenizer (encode)
 
     // Layer Norm 1
     layernorm_2d(&embeddings[0][0],ctx_len,d_model,&layer_norm1_gamma[0],&layer_norm1_beta[0], &X_norm[0][0],eps);
@@ -192,7 +239,26 @@ int main()
     // Layer Norm 2
     layernorm_2d(&residual_out[0][0],ctx_len,d_model,&layer_norm2_gamma[0],&layer_norm2_beta[0], &X_norm2[0][0],eps);
 
-    // 
+    // MLP layer 
+    dot_2d(&X_norm2[0][0],ctx_len,d_model,&W1[0][0],d_model,d_model*4,&X1_out[0][0],!APPLY_ATTENTION_SCALING);
+
+    //add_bias_2d();
+    add_bias_2d(&X1_out[0][0],ctx_len,d_model*4,&b1[0],NULL);
+    
+    gelu_2d(&X1_out[0][0],ctx_len,d_model*4,NULL);
+
+    dot_2d(&X1_out[0][0],ctx_len,d_model*4,&W2[0][0],d_model*4,d_model,&X2_out[0][0],!APPLY_ATTENTION_SCALING);
+
+    add_bias_2d(&X2_out[0][0],ctx_len,d_model,&b2[0],NULL);
+
+    add_2d(&X2_out[0][0],ctx_len,d_model,&residual_out[0][0],&residual2_out[0][0]);
+
+    layernorm_2d(&residual2_out[0][0],ctx_len,d_model,&layer_normf_gamma[0],&layer_normf_beta[0],&Xf_out[0][0],eps);
+
+    // argmax 
+
+    // TODO - Tokenizer (decode?)
+
     clock_gettime(CLOCK_MONOTONIC, &end);
     double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
     printf("GPT2 Inference - End\n");
