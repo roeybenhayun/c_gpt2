@@ -10,25 +10,25 @@
 #define APPLY_ATTENTION_SCALING (1)
 #define PI (3.14159265358979323846)
 
-void print_2d_tensor(double *a, int a_r, int a_c);
-double mean_(double *x, int len);
-double variance_(double *x,int len, double mean);
-void softmax_2d(double *a, int a_r, int a_c, double * c_out);
-void dot_2d(double *a,int a_r, int a_c, double*b,int b_r,int b_c,double* c_out,int apply_attention_scaling );
-void transpose_2d(double *a, int a_r, int a_c, double*b);
-void layernorm_2d(double *a, int a_r, int a_c,double * ln_gamma, double * ln_beta,double * out, double epsilon);
-double gelu(double x);
-void gelu_2d(double *a,int a_c, int a_r, double *out);
-void apply_casual_masking(double * a, int size);
+void print_2d_tensor(float *a, int a_r, int a_c);
+float mean_(float *x, int len);
+float variance_(float *x,int len, float mean);
+void softmax_2d(float *a, int a_r, int a_c, float * c_out);
+void dot_2d(float *a,int a_r, int a_c, float*b,int b_r,int b_c,float* c_out,int apply_attention_scaling );
+void transpose_2d(float *a, int a_r, int a_c, float*b);
+void layernorm_2d(float *a, int a_r, int a_c,float * ln_gamma, float * ln_beta,float * out, float epsilon);
+float gelu(float x);
+void gelu_2d(float *a,int a_c, int a_r, float *out);
+void apply_casual_masking(float * a, int size);
 
 // TODO 
 // * Numerical stability - substract the row's max is the standard trick
 // * Batch support - softmax_3d()
-void softmax_2d(double *a, int a_r, int a_c, double * c_out){    
+void softmax_2d(float *a, int a_r, int a_c, float * c_out){    
     for (int i=0; i<a_r; i++){
-        double sum = 0.0;
+        float sum = 0.0;
         for (int j=0; j<a_c; j++){
-            double temp_exp_res = exp(*(a + i*a_c + j));
+            float temp_exp_res = exp(*(a + i*a_c + j));
             *(c_out + i*a_c +j) = temp_exp_res;
             sum += temp_exp_res;   
         }
@@ -37,21 +37,21 @@ void softmax_2d(double *a, int a_r, int a_c, double * c_out){
         }                
     }
 }
-// switched to double for higher precision
+// switched to float for higher precision
 // calc matched python code
-void dot_2d(double *a,int a_r, int a_c, double*b,int b_r,int b_c,double* c_out,int apply_attention_scaling ){
+void dot_2d(float *a,int a_r, int a_c, float*b,int b_r,int b_c,float* c_out,int apply_attention_scaling ){
 #ifdef USE_ACCELERATE
 
     // Use Accelerate's BLAS implementation
-    double alpha = 1.0;
-    double beta = 0.0;
+    float alpha = 1.0;
+    float beta = 0.0;
 
     // Optional attention scaling
     if (apply_attention_scaling) {
-        alpha = 1.0 / sqrt((double)a_c);
+        alpha = 1.0 / sqrt((float)a_c);
     }
 
-    cblas_dgemm(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_NO_TRANS,
+    cblas_sgemm(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_NO_TRANS,
                 a_r, b_c, a_c,
                 alpha,
                 a, a_c,
@@ -60,12 +60,12 @@ void dot_2d(double *a,int a_r, int a_c, double*b,int b_r,int b_c,double* c_out,i
                 c_out, b_c);
     //return 0.0; // optional: you can return a checksum like before
 #else    
-    double dot_product = 0.0;
-    double dot_product_sum = 0.0;
-    double scale_factor = 1.0;
+    float dot_product = 0.0;
+    float dot_product_sum = 0.0;
+    float scale_factor = 1.0;
     // TODO - check edge cases here
     if(apply_attention_scaling == 1){
-        scale_factor = (double)(1.0/sqrt(a_c));
+        scale_factor = (float)(1.0/sqrt(a_c));
     }
     //printf("in dot_2d\n");
     for (int i=0; i<a_r; i++){        
@@ -73,8 +73,8 @@ void dot_2d(double *a,int a_r, int a_c, double*b,int b_r,int b_c,double* c_out,i
             for (int k=0; k<b_r; k++){
                 //printf("%d,%d,  %d,%d\n",i,k,k,j);
                 // dot_product += a[i][k] * b[k][j];
-                double av = *(a + i * a_c + k);
-                double bv = *(b + k * b_c + j);
+                float av = *(a + i * a_c + k);
+                float bv = *(b + k * b_c + j);
                 dot_product += av * bv;     
             }
             dot_product_sum += dot_product;
@@ -91,14 +91,14 @@ void dot_2d(double *a,int a_r, int a_c, double*b,int b_r,int b_c,double* c_out,i
 #endif
 }
 
-void apply_casual_masking(double * a, int size){
+void apply_casual_masking(float * a, int size){
     for (int i = 0; i < size; i++) {
         for (int j = i + 1; j < size; j++) {
             a[i * size + j] = -INFINITY;
         }
     }
 }
-void print_2d_tensor(double *a, int a_r, int a_c)
+void print_2d_tensor(float *a, int a_r, int a_c)
 {
     printf("[");
     for (int i=0; i<a_r; i++){
@@ -115,7 +115,7 @@ void print_2d_tensor(double *a, int a_r, int a_c)
 }
 
 
-void transpose_2d(double *a, int a_r, int a_c, double*b){
+void transpose_2d(float *a, int a_r, int a_c, float*b){
 // TODO input check
     for (int i=0; i<a_r; i++){
         for (int j=0; j<a_c; j++){
@@ -124,21 +124,21 @@ void transpose_2d(double *a, int a_r, int a_c, double*b){
     }
 }
 // TODO - add the math expression
-void layernorm_2d(double *a, int a_r, int a_c, 
-                    double * ln_gamma, double * ln_beta,
-                    double * out, double epsilon){
+void layernorm_2d(float *a, int a_r, int a_c, 
+                    float * ln_gamma, float * ln_beta,
+                    float * out, float epsilon){
     
     for (int i=0; i < a_r; i++){
-        double *row = a + i * a_c;
-        double mean = mean_(row,a_c);
-        double var = variance_(row,a_c,mean);
+        float *row = a + i * a_c;
+        float mean = mean_(row,a_c);
+        float var = variance_(row,a_c,mean);
         for (int j=0; j<a_c; j++){
             *(out + i*a_c + j) = *(ln_gamma+j) * ((*(a + i*a_c + j) - mean)/sqrt(var+epsilon)) + *(ln_beta+j);
         }
     }
 }
 
-void add_2d(double *a, int a_r, int a_c, double *b, double *out){
+void add_2d(float *a, int a_r, int a_c, float *b, float *out){
     for (int i=0; i<a_r; i++){
         for (int j=0; j<a_c; j++){
             *(out +i*a_c + j) = *(a +i*a_c + j) + *(b +i*a_c + j);
@@ -147,8 +147,8 @@ void add_2d(double *a, int a_r, int a_c, double *b, double *out){
 }
 
 // if out is null addition is inplace 
-void add_bias_2d(double *a, int a_r, int a_c, double *b, double *out){
-    double * tmp = out;
+void add_bias_2d(float *a, int a_r, int a_c, float *b, float *out){
+    float * tmp = out;
     if (out == NULL){ //inplace
         tmp = a;
     } 
@@ -159,28 +159,28 @@ void add_bias_2d(double *a, int a_r, int a_c, double *b, double *out){
     }
 }
 
-double mean_(double *x, int len){
-    double sum = 0.0;
+float mean_(float *x, int len){
+    float sum = 0.0;
     for (int i=0; i<len; i++){
         sum += *(x+i);
     }
-    return (sum/(double)len);
+    return (sum/(float)len);
 }
-double variance_(double *x,int len, double mean){
-    double sum = 0.0;
+float variance_(float *x,int len, float mean){
+    float sum = 0.0;
     for (int i=0; i<len; i++){
         sum += pow(((*(x+i)) - mean),2);
     }
-    return (sum/(double)len);
+    return (sum/(float)len);
 }
 
-double gelu(double x){
-    double term = sqrt(2.0/PI);
+float gelu(float x){
+    float term = sqrt(2.0/PI);
     return 0.5 * x * (1 + tanh (term * (x + 0.044715*pow(x,3))));
 }
 
-void gelu_2d(double *a,int a_c, int a_r, double *out){
-    double * tmp = out;
+void gelu_2d(float *a,int a_c, int a_r, float *out){
+    float * tmp = out;
     if (out == NULL){ //inplace
         tmp = a;
     } 
@@ -195,68 +195,68 @@ void gelu_2d(double *a,int a_c, int a_r, double *out){
 // GPT2 small
 const int d_model = 768;
 const int ctx_len = 1024;
-const double eps = 0.000005;
+const float eps = 0.000005;
 struct timespec start,end;
 const int num_layers = 12;
 // TODO: Tokenizer block
 // TODO: Positional Embeddings
-double embeddings[ctx_len][d_model] = {}; // for now post positional embeddings. This would go into layer norm
+float embeddings[ctx_len][d_model] = {}; // for now post positional embeddings. This would go into layer norm
 
-double X_norm[ctx_len][d_model] = {};
-double X_norm2[ctx_len][d_model] = {};
+float X_norm[ctx_len][d_model] = {};
+float X_norm2[ctx_len][d_model] = {};
 
-double W1[d_model][d_model*4] = {};
-double b1[d_model*4] = {};
-double X1[ctx_len][d_model*4] = {};
-double X1_out[ctx_len][d_model*4] = {};
-double W2[d_model*4][d_model] = {};
-double b2[d_model] = {};
-double X2[ctx_len][d_model] = {};
-double X2_out[ctx_len][d_model] = {};
-double Xf_out[ctx_len][d_model] = {};
+float W1[d_model][d_model*4] = {};
+float b1[d_model*4] = {};
+float X1[ctx_len][d_model*4] = {};
+float X1_out[ctx_len][d_model*4] = {};
+float W2[d_model*4][d_model] = {};
+float b2[d_model] = {};
+float X2[ctx_len][d_model] = {};
+float X2_out[ctx_len][d_model] = {};
+float Xf_out[ctx_len][d_model] = {};
 
-double W_q[d_model][d_model] = {}; // learnable
-double W_k[d_model][d_model] = {}; // learnable
-double W_v[d_model][d_model] = {}; // learnable
-double Q[ctx_len][d_model] = {};
-double K[ctx_len][d_model] = {};
-double K_T[d_model][ctx_len] = {};
-double V[ctx_len][d_model] = {};
-double attention_scores[ctx_len][ctx_len] = {};
-double attention_weights[ctx_len][ctx_len] = {};
-double context[ctx_len][d_model] = {};
+float W_q[d_model][d_model] = {}; // learnable
+float W_k[d_model][d_model] = {}; // learnable
+float W_v[d_model][d_model] = {}; // learnable
+float Q[ctx_len][d_model] = {};
+float K[ctx_len][d_model] = {};
+float K_T[d_model][ctx_len] = {};
+float V[ctx_len][d_model] = {};
+float attention_scores[ctx_len][ctx_len] = {};
+float attention_weights[ctx_len][ctx_len] = {};
+float context[ctx_len][d_model] = {};
 
-double layer_norm1_gamma[d_model] = {}; // default: no scaling
-double layer_norm1_beta[d_model] = {};  // default: no shifting
-double layer_norm2_gamma[d_model] = {}; // default: no scaling
-double layer_norm2_beta[d_model] = {};  // default: no shifting
-double layer_normf_gamma[d_model] = {}; // default: no scaling
-double layer_normf_beta[d_model] = {};  // default: no shifting
+float layer_norm1_gamma[d_model] = {}; // default: no scaling
+float layer_norm1_beta[d_model] = {};  // default: no shifting
+float layer_norm2_gamma[d_model] = {}; // default: no scaling
+float layer_norm2_beta[d_model] = {};  // default: no shifting
+float layer_normf_gamma[d_model] = {}; // default: no scaling
+float layer_normf_beta[d_model] = {};  // default: no shifting
 
-double residual_out[ctx_len][d_model] = {};
-double residual2_out[ctx_len][d_model] = {};
+float residual_out[ctx_len][d_model] = {};
+float residual2_out[ctx_len][d_model] = {};
 
 
 
 typedef struct{
-    double * W_q;
-    double * W_k;
-    double * W_v;
-    double * W1;
-    double * W2;
-    double * b1;
-    double * b2;
-    double *ln1_gamma;
-    double *ln1_beta;
-    double *ln2_gamma;
-    double *ln2_beta;
+    float * W_q;
+    float * W_k;
+    float * W_v;
+    float * W1;
+    float * W2;
+    float * b1;
+    float * b2;
+    float *ln1_gamma;
+    float *ln1_beta;
+    float *ln2_gamma;
+    float *ln2_beta;
 }TransformerBlockParams;
 
 
 
-void transformer_block(double *input,
+void transformer_block(float *input,
                         TransformerBlockParams * tbp,
-                        double * output){
+                        float * output){
     // Layer Norm 1
     layernorm_2d(input,ctx_len,d_model,tbp->ln1_gamma,tbp->ln1_beta, &X_norm[0][0],eps);
     printf("ln1_completed\n");
@@ -358,7 +358,7 @@ int main()
     // TODO - Tokenizer (decode?)
 
     clock_gettime(CLOCK_MONOTONIC, &end);
-    double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+    float elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
     printf("GPT2 Inference - End\n");
     printf("Inference time =  %.2f seconds\n",elapsed);
 
