@@ -1,6 +1,19 @@
 #include <math.h>
 #include <stdio.h>
 #include <time.h>
+// tokenizer_client.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+#define SERVER_PORT 65432
+#define SERVER_IP "127.0.0.1"
+#define BUF_SIZE 4096
+
 #ifdef USE_ACCELERATE
 #include <Accelerate/Accelerate.h>
 #define CBLAS_ROW_MAJOR CblasRowMajor
@@ -20,6 +33,37 @@ void layernorm_2d(float *a, int a_r, int a_c,float * ln_gamma, float * ln_beta,f
 float gelu(float x);
 void gelu_2d(float *a,int a_c, int a_r, float *out);
 void apply_casual_masking(float * a, int size);
+
+void send_json_to_tokenizer(const char *json_str, char *response_buf) {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(SERVER_PORT);
+    inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr);
+
+    if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection to tokenizer server failed");
+        close(sock);
+        exit(1);
+    }
+
+    send(sock, json_str, strlen(json_str), 0);
+
+    int len = recv(sock, response_buf, BUF_SIZE - 1, 0);
+    if (len < 0) {
+        perror("Receive failed");
+        close(sock);
+        exit(1);
+    }
+    response_buf[len] = '\0';
+
+    close(sock);
+}
 
 // TODO 
 // * Numerical stability - substract the row's max is the standard trick
@@ -345,12 +389,35 @@ int main()
     // Get user input 
     // TODO - Tokenizer (encode)
 
+    char input_buffer[2048];
+    char encode_request[2048];
+    char encode_response[2048];
+
+    while(1){
+        printf("Enter Input:");
+        fgets(input_buffer, sizeof(input_buffer), stdin);
+        input_buffer[strcspn(input_buffer, "\n")] = 0;
+        if (strcmp(input_buffer, "q") == 0) {
+            printf("QUIT\n");
+            break;
+        }
+        snprintf(encode_request, sizeof(encode_request),
+         "{\"mode\": \"encode\", \"text\": \"%s\"}", input_buffer);
+         send_json_to_tokenizer(encode_request, encode_response);
+        printf("Encode Response: %s\n", encode_response);
+        
+
+    }
+    return 1;
+
     for (int i=0 ; i < num_layers; i++){
         
         load_layers_weights(&layer, i);
         transformer_block(&embeddings[0][0],&layer, &embeddings[0][0]);
         printf("*****Layer %d completed******\n",i);
     }
+    layernorm_2d(&residual2_out[0][0],ctx_len,d_model,&layer_normf_gamma[0],&layer_normf_beta[7],&Xf_out[0][0],eps);
+    printf("*****Final layer norm completed\n");
     
 
     // argmax 
