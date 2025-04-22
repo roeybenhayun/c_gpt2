@@ -36,9 +36,9 @@ Target: arm64-apple-darwin23.6.0
 Thread model: posix
 
 How to build?
-gcc scaled_dot_product_attention.c -o out/scaled_dot_product_attention
+gcc -O3 -DUSE_ACCELERATE -DACCELERATE_NEW_LAPACK -framework Accelerate gpt2.c -o ./out/gpt2
 How to run?
-./out/scaled_dot_product_attention
+./out/gpt2.c
 How to test the tokenizer client server?
 Run the server (python)
 python tokenizer

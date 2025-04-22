@@ -1,6 +1,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <time.h>
+#ifdef USE_ACCELERATE
+#include <Accelerate/Accelerate.h>
+#define CBLAS_ROW_MAJOR CblasRowMajor
+#define CBLAS_NO_TRANS CblasNoTrans
+#endif
 
 #define APPLY_ATTENTION_SCALING (1)
 #define PI (3.14159265358979323846)
@@ -9,12 +14,12 @@ void print_2d_tensor(double *a, int a_r, int a_c);
 double mean_(double *x, int len);
 double variance_(double *x,int len, double mean);
 void softmax_2d(double *a, int a_r, int a_c, double * c_out);
-double dot_2d(double *a,int a_r, int a_c, double*b,int b_r,int b_c,double* c_out,int apply_attention_scaling );
+void dot_2d(double *a,int a_r, int a_c, double*b,int b_r,int b_c,double* c_out,int apply_attention_scaling );
 void transpose_2d(double *a, int a_r, int a_c, double*b);
 void layernorm_2d(double *a, int a_r, int a_c,double * ln_gamma, double * ln_beta,double * out, double epsilon);
 double gelu(double x);
 void gelu_2d(double *a,int a_c, int a_r, double *out);
-
+void apply_casual_masking(double * a, int size);
 
 // TODO 
 // * Numerical stability - substract the row's max is the standard trick
@@ -34,7 +39,27 @@ void softmax_2d(double *a, int a_r, int a_c, double * c_out){
 }
 // switched to double for higher precision
 // calc matched python code
-double dot_2d(double *a,int a_r, int a_c, double*b,int b_r,int b_c,double* c_out,int apply_attention_scaling ){
+void dot_2d(double *a,int a_r, int a_c, double*b,int b_r,int b_c,double* c_out,int apply_attention_scaling ){
+#ifdef USE_ACCELERATE
+
+    // Use Accelerate's BLAS implementation
+    double alpha = 1.0;
+    double beta = 0.0;
+
+    // Optional attention scaling
+    if (apply_attention_scaling) {
+        alpha = 1.0 / sqrt((double)a_c);
+    }
+
+    cblas_dgemm(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_NO_TRANS,
+                a_r, b_c, a_c,
+                alpha,
+                a, a_c,
+                b, b_c,
+                beta,
+                c_out, b_c);
+    //return 0.0; // optional: you can return a checksum like before
+#else    
     double dot_product = 0.0;
     double dot_product_sum = 0.0;
     double scale_factor = 1.0;
@@ -54,17 +79,25 @@ double dot_2d(double *a,int a_r, int a_c, double*b,int b_r,int b_c,double* c_out
             }
             dot_product_sum += dot_product;
             *(c_out + i*b_c +j) = dot_product * scale_factor;
-            // Casual mask
-            if (j > i){ // future token, mask it
-                *(c_out + i*b_c +j) = -INFINITY;
-            }
-            dot_product = 0.0;
+            // Casual mask - take outside of the loop
+            //if (j > i){ // future token, mask it
+            //    *(c_out + i*b_c +j) = -INFINITY;
+            //}
+            //dot_product = 0.0;
         }
     }
     //printf("dot_2d_product = %.17f\n",dot_product_sum);
-    return dot_product_sum;
+    //return dot_product_sum;
+#endif
 }
 
+void apply_casual_masking(double * a, int size){
+    for (int i = 0; i < size; i++) {
+        for (int j = i + 1; j < size; j++) {
+            a[i * size + j] = -INFINITY;
+        }
+    }
+}
 void print_2d_tensor(double *a, int a_r, int a_c)
 {
     printf("[");
@@ -242,6 +275,10 @@ void transformer_block(double *input,
     dot_2d(&Q[0][0],ctx_len,d_model,&K_T[0][0],d_model,ctx_len,&attention_scores[0][0],APPLY_ATTENTION_SCALING);
     //print_2d_tensor(&attention_scores[0][0],ctx_len,ctx_len);
     
+    // Casual masking
+    apply_casual_masking(&attention_scores[0][0],ctx_len);
+    printf("casual masking completed\n");
+
     // Softmax
     softmax_2d(&attention_scores[0][0], ctx_len,ctx_len,&attention_weights[0][0]);
     //print_2d_tensor(&attention_weights[0][0],ctx_len,ctx_len);
