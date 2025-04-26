@@ -247,6 +247,8 @@ const int d_ff = d_model * 4;
 // TODO: Tokenizer block
 // TODO: Positional Embeddings
 float wte[vocab_size][d_model] = {};
+float wte_T[d_model][vocab_size] = {};
+
 float wpe[ctx_len][d_model] = {};
 float embeddings[ctx_len][d_model] = {}; // for now post positional embeddings. This would go into layer norm
 
@@ -291,6 +293,7 @@ float residual2_out[ctx_len][d_model] = {};
 float attn_proj_weight[d_model][d_model] = {};
 float attn_proj_bias[d_model] = {};
 
+float logits[ctx_len][vocab_size] = {};
 
 typedef struct{
     float * W_q;
@@ -458,8 +461,12 @@ int main()
     char input_buffer[2048];
     char encode_request[2048];
     char encode_response[2048];
-    int tokens[n_tokens] = {0};
+    char decode_request[2048];
+    char decode_response[2048];
 
+    int tokens[n_tokens] = {0};
+    float max = 0.0;
+    int predicted_token_index = 0;
     long offset = (vocab_size * d_model + ctx_len * d_model) * sizeof(float);
 
     TransformerBlockParams layer = {
@@ -486,6 +493,9 @@ int main()
     fread_or_exit(wte,sizeof(float),vocab_size*d_model,fp);
     fread_or_exit(wpe,sizeof(float),ctx_len*d_model,fp);
 
+    
+    transpose_2d(&wte[0][0], d_model,vocab_size , &wte_T[0][0]);
+
     while(1){ 
         printf("Enter Input:");
 
@@ -502,6 +512,10 @@ int main()
         // cleanup, move to the end
         memset(embeddings,0,sizeof(embeddings));
         memset(tokens,0,sizeof(tokens));
+        memset(encode_request, 0, sizeof(encode_request));
+        memset(encode_response, 0, sizeof(encode_response));
+        memset(decode_request, 0, sizeof(decode_request));
+        memset(decode_response, 0, sizeof(decode_response));
 
         // Format
         snprintf(encode_request, sizeof(encode_request),
@@ -538,9 +552,26 @@ int main()
     
     layernorm_2d(&residual2_out[0][0],ctx_len,d_model,&layer_normf_gamma[0],&layer_normf_beta[0],&Xf_out[0][0],eps);
     
-    // Argmax
+    // get logits
+    dot_2d(&Xf_out[0][0],ctx_len,d_model,&wte_T[0][0],d_model,vocab_size,&logits[0][0],!APPLY_ATTENTION_SCALING);
+    
+    max = -INFINITY;
+    int best_index = -1;
+    for (int i = 0; i < vocab_size; i++) {
+        float val = logits[0][i];
+        if (val > max) {
+            max = val;
+            best_index = i;  // <- save the index
+        }
+    }
 
-    // 
+    snprintf(decode_request, sizeof(decode_request),
+         "{\"mode\": \"decode\", \"tokens\": [%d]}", best_index);
+
+    send_json_to_tokenizer(decode_request, decode_response);
+    printf("Decode Response: %s\n", decode_response);
+
+
     printf("*****Final layer norm completed\n");
 
     clock_gettime(CLOCK_MONOTONIC, &end);
