@@ -242,18 +242,22 @@ const int ctx_len = 1024;
 const float eps = 0.000005;
 struct timespec start,end;
 const int num_layers = 12;
+const int vocab_size = 50257;
+const int d_ff = d_model * 4;
 // TODO: Tokenizer block
 // TODO: Positional Embeddings
+float wte[vocab_size][d_model] = {};
+float wpe[ctx_len][d_model] = {};
 float embeddings[ctx_len][d_model] = {}; // for now post positional embeddings. This would go into layer norm
 
 float X_norm[ctx_len][d_model] = {};
 float X_norm2[ctx_len][d_model] = {};
 
-float W1[d_model][d_model*4] = {};
-float b1[d_model*4] = {};
-float X1[ctx_len][d_model*4] = {};
-float X1_out[ctx_len][d_model*4] = {};
-float W2[d_model*4][d_model] = {};
+float W1[d_model][d_ff] = {};
+float b1[d_ff] = {};
+float X1[ctx_len][d_ff] = {};
+float X1_out[ctx_len][d_ff] = {};
+float W2[d_ff][d_model] = {};
 float b2[d_model] = {};
 float X2[ctx_len][d_model] = {};
 float X2_out[ctx_len][d_model] = {};
@@ -262,6 +266,10 @@ float Xf_out[ctx_len][d_model] = {};
 float W_q[d_model][d_model] = {}; // learnable
 float W_k[d_model][d_model] = {}; // learnable
 float W_v[d_model][d_model] = {}; // learnable
+float b_q[d_model] = {}; // learnable
+float b_k[d_model] = {}; // learnable
+float b_v[d_model] = {}; // learnable
+
 float Q[ctx_len][d_model] = {};
 float K[ctx_len][d_model] = {};
 float K_T[d_model][ctx_len] = {};
@@ -280,12 +288,19 @@ float layer_normf_beta[d_model] = {};  // default: no shifting
 float residual_out[ctx_len][d_model] = {};
 float residual2_out[ctx_len][d_model] = {};
 
+float attn_proj_weight[d_model][d_model] = {};
+float attn_proj_bias[d_model] = {};
 
 
 typedef struct{
     float * W_q;
     float * W_k;
     float * W_v;
+    float * b_q;
+    float * b_k;
+    float * b_v;
+    float *attn_proj_weight;
+    float *attn_proj_bias;
     float * W1;
     float * W2;
     float * b1;
@@ -294,6 +309,7 @@ typedef struct{
     float *ln1_beta;
     float *ln2_gamma;
     float *ln2_beta;
+
 }TransformerBlockParams;
 
 
@@ -307,8 +323,14 @@ void transformer_block(float *input,
 
     // QKV
     dot_2d(&X_norm[0][0],ctx_len,d_model,tbp->W_q,d_model,d_model,&Q[0][0],!APPLY_ATTENTION_SCALING);
+    add_bias_2d(&Q[0][0],ctx_len,d_model,tbp->b_q,NULL);
+
     dot_2d(&X_norm[0][0],ctx_len,d_model,tbp->W_k,d_model,d_model,&K[0][0],!APPLY_ATTENTION_SCALING);
+    add_bias_2d(&K[0][0],ctx_len,d_model,tbp->b_k,NULL);
+
     dot_2d(&X_norm[0][0],ctx_len,d_model,tbp->W_v,d_model,d_model,&V[0][0],!APPLY_ATTENTION_SCALING);
+    add_bias_2d(&V[0][0],ctx_len,d_model,tbp->b_v,NULL);
+
     printf("QKV completed\n");
 
     // Attention
@@ -333,6 +355,10 @@ void transformer_block(float *input,
     //print_2d_tensor(&context[0][0],ctx_len,d_model);
     printf("context completed\n");
 
+    // 
+    dot_2d(&context[0][0],ctx_len,d_model,tbp->attn_proj_weight,d_model,d_model,&context[0][0],!APPLY_ATTENTION_SCALING);
+    add_bias_2d(&context[0][0],ctx_len,d_model,tbp->attn_proj_bias,NULL);
+
     // Residuals
     add_2d(input,ctx_len,d_model,&context[0][0],&residual_out[0][0]);
     printf("residuals completed\n");
@@ -342,16 +368,16 @@ void transformer_block(float *input,
     printf("ln2 completed\n");
 
     // MLP layer 
-    dot_2d(&X_norm2[0][0],ctx_len,d_model,tbp->W1,d_model,d_model*4,&X1_out[0][0],!APPLY_ATTENTION_SCALING);
+    dot_2d(&X_norm2[0][0],ctx_len,d_model,tbp->W1,d_model,d_ff,&X1_out[0][0],!APPLY_ATTENTION_SCALING);
     printf("mlp l1 w completed\n");
     //add_bias_2d();
-    add_bias_2d(&X1_out[0][0],ctx_len,d_model*4,tbp->b1,NULL);
+    add_bias_2d(&X1_out[0][0],ctx_len,d_ff,tbp->b1,NULL);
     printf("mlp l1 b completed\n");
     
-    gelu_2d(&X1_out[0][0],ctx_len,d_model*4,NULL);
+    gelu_2d(&X1_out[0][0],ctx_len,d_ff,NULL);
     printf("mlp gelu completed\n");
 
-    dot_2d(&X1_out[0][0],ctx_len,d_model*4,tbp->W2,d_model*4,d_model,&X2_out[0][0],!APPLY_ATTENTION_SCALING);
+    dot_2d(&X1_out[0][0],ctx_len,d_ff,tbp->W2,d_ff,d_model,&X2_out[0][0],!APPLY_ATTENTION_SCALING);
     printf("mlp l2 w completed\n");
 
     add_bias_2d(&X2_out[0][0],ctx_len,d_model,tbp->b2,NULL);
@@ -364,19 +390,87 @@ void transformer_block(float *input,
     //layernorm_2d(&residual2_out[0][0],ctx_len,d_model,tbp->gamma,ln_f->beta,output,eps);
 }
 
-void load_layers_weights(TransformerBlockParams * p_tfb, int layer_id){
-    // load layer weights
+int parse_tokens(const char *json, int *tokens, int max_tokens) {
+    const char *start = strchr(json, '[');
+    const char *end = strchr(json, ']');
+    if (!start || !end || start > end) return -1; // Invalid format
+
+    start++; // skip '['
+    int count = 0;
+    char number[16]; // temporary buffer
+
+    while (start < end && count < max_tokens) {
+        // Skip spaces
+        while (*start == ' ' || *start == ',') start++;
+
+        int len = 0;
+        while (start < end && *start >= '0' && *start <= '9' && len < 15) {
+            number[len++] = *start;
+            start++;
+        }
+        number[len] = '\0';
+
+        if (len > 0) {
+            tokens[count++] = atoi(number);
+        }
+    }
+
+    return count; // number of tokens parsed
+}
+
+void fread_or_exit(void *ptr, size_t size, size_t count, FILE *fp) {
+    if (fread(ptr, size, count, fp) != count) {
+        fprintf(stderr, "Error: fread failed or unexpected EOF.\n");
+        exit(1);
+    }
+}
+
+void load_layers_weights(TransformerBlockParams * p_tfb, int layer_id,FILE * fp){
+    
+    fread_or_exit(p_tfb->ln1_gamma, sizeof(float), d_model, fp);//ln_1.weight
+    fread_or_exit(p_tfb->ln1_beta,  sizeof(float), d_model, fp);//ln_1.bias
+
+
+    fread_or_exit(p_tfb->W_q,  sizeof(float), d_model*d_model, fp);//attn.c_attn.weight
+    fread_or_exit(p_tfb->W_k,  sizeof(float), d_model*d_model, fp);//attn.c_attn.weight
+    fread_or_exit(p_tfb->W_v,  sizeof(float), d_model*d_model, fp);//attn.c_attn.weight
+
+    fread_or_exit(b_q,  sizeof(float), d_model, fp);//attn.c_attn.bias
+    fread_or_exit(b_k,  sizeof(float), d_model, fp);//attn.c_attn.bias
+    fread_or_exit(b_v,  sizeof(float), d_model, fp);//attn.c_attn.bias
+
+    fread_or_exit(p_tfb->attn_proj_weight,  sizeof(float), d_model*d_model, fp);//attn.c_proj.weight
+    fread_or_exit(p_tfb->attn_proj_bias,  sizeof(float), d_model, fp);//attn.c_proj.bias
+    
+    fread_or_exit(p_tfb->ln2_gamma, sizeof(float), d_model, fp);//ln_2.weight
+    fread_or_exit(p_tfb->ln2_beta,  sizeof(float), d_model, fp);//ln_2.bias
+
+    fread_or_exit(p_tfb->W1, sizeof(float), d_model*d_ff, fp);//mlp.c_fc.weight
+    fread_or_exit(p_tfb->b1, sizeof(float), d_ff, fp);//mlp.c_fc.bias
+    fread_or_exit(p_tfb->W2, sizeof(float), d_ff*d_model, fp);//mlp.c_proj.weight
+    fread_or_exit(p_tfb->b2, sizeof(float), d_model, fp);//mlp.c_proj.bias
+
 }
 
 int main()
 {
-    clock_gettime(CLOCK_MONOTONIC, &start);
-    printf("GPT2 Inference - Start\n");
-    
+    const int n_tokens = 1024;
+    char input_buffer[2048];
+    char encode_request[2048];
+    char encode_response[2048];
+    int tokens[n_tokens] = {0};
+
+    long offset = (vocab_size * d_model + ctx_len * d_model) * sizeof(float);
+
     TransformerBlockParams layer = {
         &W_q[0][0],
         &W_k[0][0],
         &W_v[0][0],
+        &b_q[0],
+        &b_k[0],
+        &b_v[0],
+        &attn_proj_weight[0][0],
+        &attn_proj_bias[0],
         &W1[0][0],
         &W2[0][0],
         &b1[0],
@@ -386,48 +480,79 @@ int main()
         layer_norm2_gamma,
         layer_norm2_beta
     };
-    // Get user input 
-    // TODO - Tokenizer (encode)
 
-    char input_buffer[2048];
-    char encode_request[2048];
-    char encode_response[2048];
+    FILE * fp = fopen("gpt2_weights.bin","rb");
 
-    while(1){
+    fread_or_exit(wte,sizeof(float),vocab_size*d_model,fp);
+    fread_or_exit(wpe,sizeof(float),ctx_len*d_model,fp);
+
+    while(1){ 
         printf("Enter Input:");
+
+        // Input
         fgets(input_buffer, sizeof(input_buffer), stdin);
         input_buffer[strcspn(input_buffer, "\n")] = 0;
         if (strcmp(input_buffer, "q") == 0) {
             printf("QUIT\n");
             break;
         }
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        printf("GPT2 Inference - Start\n");
+
+        // cleanup, move to the end
+        memset(embeddings,0,sizeof(embeddings));
+        memset(tokens,0,sizeof(tokens));
+
+        // Format
         snprintf(encode_request, sizeof(encode_request),
          "{\"mode\": \"encode\", \"text\": \"%s\"}", input_buffer);
-         send_json_to_tokenizer(encode_request, encode_response);
+
+         // Get tokens
+        send_json_to_tokenizer(encode_request, encode_response);
         printf("Encode Response: %s\n", encode_response);
-        
 
-    }
-    return 1;
+        // Format
+        int n_tokens = parse_tokens(encode_response, tokens, ctx_len);
+        if (n_tokens < 0) {
+            printf("Failed to parse tokens!\n");
+            continue;
+        }
+        printf("Parsed %d tokens\n",n_tokens);
 
+        // Set
+        for (int i=0; i<n_tokens;i++){
+            for (int j=0; j<d_model;j++){
+                embeddings[i][j] = wte[tokens[i]][j] + wpe[i][j];
+            }
+        }
+
+
+    // Infer
     for (int i=0 ; i < num_layers; i++){
         
-        load_layers_weights(&layer, i);
+        load_layers_weights(&layer, i,fp);
         transformer_block(&embeddings[0][0],&layer, &embeddings[0][0]);
         printf("*****Layer %d completed******\n",i);
+        fseek(fp, offset, SEEK_SET);
     }
-    layernorm_2d(&residual2_out[0][0],ctx_len,d_model,&layer_normf_gamma[0],&layer_normf_beta[7],&Xf_out[0][0],eps);
-    printf("*****Final layer norm completed\n");
     
+    layernorm_2d(&residual2_out[0][0],ctx_len,d_model,&layer_normf_gamma[0],&layer_normf_beta[0],&Xf_out[0][0],eps);
+    
+    // Argmax
 
-    // argmax 
-
-    // TODO - Tokenizer (decode?)
+    // 
+    printf("*****Final layer norm completed\n");
 
     clock_gettime(CLOCK_MONOTONIC, &end);
     float elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
     printf("GPT2 Inference - End\n");
     printf("Inference time =  %.2f seconds\n",elapsed);
+    
+    }
+
+    fclose(fp);
+    // argmax 
+    // TODO - Tokenizer (decode?)
 
     return 1;
 }
