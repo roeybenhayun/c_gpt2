@@ -272,6 +272,9 @@ float b_q[d_model] = {}; // learnable
 float b_k[d_model] = {}; // learnable
 float b_v[d_model] = {}; // learnable
 
+float temp_attn_weight[d_model * 3 * d_model]; // 2304 = 768 * 3
+float temp_attn_bias[3*d_model];
+
 float Q[ctx_len][d_model] = {};
 float K[ctx_len][d_model] = {};
 float K_T[d_model][ctx_len] = {};
@@ -434,13 +437,23 @@ void load_layers_weights(TransformerBlockParams * p_tfb, int layer_id,FILE * fp)
     fread_or_exit(p_tfb->ln1_beta,  sizeof(float), d_model, fp);//ln_1.bias
 
 
-    fread_or_exit(p_tfb->W_q,  sizeof(float), d_model*d_model, fp);//attn.c_attn.weight
-    fread_or_exit(p_tfb->W_k,  sizeof(float), d_model*d_model, fp);//attn.c_attn.weight
-    fread_or_exit(p_tfb->W_v,  sizeof(float), d_model*d_model, fp);//attn.c_attn.weight
+    fread_or_exit(temp_attn_weight, sizeof(float), d_model * 3 * d_model, fp);
 
-    fread_or_exit(b_q,  sizeof(float), d_model, fp);//attn.c_attn.bias
-    fread_or_exit(b_k,  sizeof(float), d_model, fp);//attn.c_attn.bias
-    fread_or_exit(b_v,  sizeof(float), d_model, fp);//attn.c_attn.bias
+    // Split temp_attn_weight into W_q, W_k, W_v
+    for (int i = 0; i < d_model; i++) {
+        for (int j = 0; j < d_model; j++) {
+            p_tfb->W_q[i*d_model + j] = temp_attn_weight[i*3*d_model + j];
+            p_tfb->W_k[i*d_model + j] = temp_attn_weight[i*3*d_model + d_model + j];
+            p_tfb->W_v[i*d_model + j] = temp_attn_weight[i*3*d_model + 2*d_model + j];
+        }
+    }
+
+    fread_or_exit(temp_attn_bias, sizeof(float), 3*d_model, fp);
+    for (int i = 0; i < d_model; i++) {
+        p_tfb->b_q[i] = temp_attn_bias[i];
+        p_tfb->b_k[i] = temp_attn_bias[d_model + i];
+        p_tfb->b_v[i] = temp_attn_bias[2*d_model + i];
+    }
 
     fread_or_exit(p_tfb->attn_proj_weight,  sizeof(float), d_model*d_model, fp);//attn.c_proj.weight
     fread_or_exit(p_tfb->attn_proj_bias,  sizeof(float), d_model, fp);//attn.c_proj.bias
@@ -463,11 +476,13 @@ int main()
     char encode_response[2048];
     char decode_request[2048];
     char decode_response[2048];
-
+    int best_index = -1;
     int tokens[n_tokens] = {0};
     float max = 0.0;
     int predicted_token_index = 0;
     long offset = (vocab_size * d_model + ctx_len * d_model) * sizeof(float);
+    char temp[32];
+    char token_list[8192];
 
     TransformerBlockParams layer = {
         &W_q[0][0],
@@ -494,11 +509,15 @@ int main()
     fread_or_exit(wpe,sizeof(float),ctx_len*d_model,fp);
 
     
+    float temperature = 0.8;
     transpose_2d(&wte[0][0], d_model,vocab_size , &wte_T[0][0]);
 
     while(1){ 
-        printf("Enter Input:");
+        
+        int max_out_tokens = 15;
+        memset(tokens,0,sizeof(tokens));
 
+        printf("Enter Input:");
         // Input
         fgets(input_buffer, sizeof(input_buffer), stdin);
         input_buffer[strcspn(input_buffer, "\n")] = 0;
@@ -506,12 +525,13 @@ int main()
             printf("QUIT\n");
             break;
         }
+
+        
         clock_gettime(CLOCK_MONOTONIC, &start);
         printf("GPT2 Inference - Start\n");
 
-        // cleanup, move to the end
-        memset(embeddings,0,sizeof(embeddings));
-        memset(tokens,0,sizeof(tokens));
+        // cleanup, move to the end (move to function)
+        memset(embeddings,0,sizeof(embeddings));            
         memset(encode_request, 0, sizeof(encode_request));
         memset(encode_response, 0, sizeof(encode_response));
         memset(decode_request, 0, sizeof(decode_request));
@@ -520,11 +540,9 @@ int main()
         // Format
         snprintf(encode_request, sizeof(encode_request),
          "{\"mode\": \"encode\", \"text\": \"%s\"}", input_buffer);
-
          // Get tokens
         send_json_to_tokenizer(encode_request, encode_response);
         printf("Encode Response: %s\n", encode_response);
-
         // Format
         int n_tokens = parse_tokens(encode_response, tokens, ctx_len);
         if (n_tokens < 0) {
@@ -532,41 +550,109 @@ int main()
             continue;
         }
         printf("Parsed %d tokens\n",n_tokens);
+        
+        int last_token_position = n_tokens - 1; 
 
-        // Set
-        for (int i=0; i<n_tokens;i++){
-            for (int j=0; j<d_model;j++){
-                embeddings[i][j] = wte[tokens[i]][j] + wpe[i][j];
+        for (int i=0; i < max_out_tokens; i++){   
+
+            // --- Reset top_k arrays ---
+            int top_k_indices[40];
+            float top_k_values[40];
+            for (int j = 0; j < 40; j++) {
+                top_k_indices[j] = -1;
+                top_k_values[j] = -INFINITY;
+            }
+        
+            // Set
+            for (int i=0; i<n_tokens;i++){
+                for (int j=0; j<d_model;j++){
+                    embeddings[i][j] = wte[tokens[i]][j] + wpe[i][j];
+                }
+            }
+
+        
+        fseek(fp, offset, SEEK_SET);
+        // Infer
+        for (int i=0 ; i < num_layers; i++){
+            printf("File position before layer %d = %ld\n", i, ftell(fp));
+            load_layers_weights(&layer, i,fp);
+            transformer_block(&embeddings[0][0],&layer, &embeddings[0][0]);
+            printf("*****Layer %d completed******\n",i);
+            //fseek(fp, offset, SEEK_SET);
+        }
+
+        // load weights and bias here
+        fread_or_exit(layer_normf_gamma, sizeof(float), d_model, fp);
+        fread_or_exit(layer_normf_beta, sizeof(float), d_model, fp);
+
+        //printf("First gamma value: %.6f\n", layer_normf_gamma[0]);
+        //printf("First beta value: %.6f\n", layer_normf_beta[0]);
+        layernorm_2d(&residual2_out[0][0],ctx_len,d_model,&layer_normf_gamma[0],&layer_normf_beta[0],&Xf_out[0][0],eps);
+
+        //printf("First embedding row:\n");
+        //for (int j = 0; j < d_model; j++) {
+        //    printf("%.4f ", Xf_out[0][j]);
+        //}
+        //printf("\n");
+        //return 1;
+
+        // get logits
+        dot_2d(&Xf_out[0][0],ctx_len,d_model,&wte_T[0][0],d_model,vocab_size,&logits[0][0],!APPLY_ATTENTION_SCALING);
+
+
+        
+        //max = -INFINITY;
+        //best_index = -1;
+        //for (int i = 0; i < vocab_size; i++) {
+        //    float val = logits[n_tokens-1][i];
+        //    if (val > max) {
+        //        max = val;
+        //        best_index = i;  // <- save the index
+        //    }
+        //}
+        // 1. Find the top 5 indice
+
+        // (initialize with very low values)
+
+    // --- Search the top 5 ---
+    for (int i = 0; i < vocab_size; i++) {
+        float val = logits[last_token_position][i];
+        val /= temperature;
+        int smallest = 0;
+        for (int j = 1; j < 40; j++) {
+            if (top_k_values[j] < top_k_values[smallest]) {
+                smallest = j;
             }
         }
-
-
-    // Infer
-    for (int i=0 ; i < num_layers; i++){
-        
-        load_layers_weights(&layer, i,fp);
-        transformer_block(&embeddings[0][0],&layer, &embeddings[0][0]);
-        printf("*****Layer %d completed******\n",i);
-        fseek(fp, offset, SEEK_SET);
-    }
-    
-    layernorm_2d(&residual2_out[0][0],ctx_len,d_model,&layer_normf_gamma[0],&layer_normf_beta[0],&Xf_out[0][0],eps);
-    
-    // get logits
-    dot_2d(&Xf_out[0][0],ctx_len,d_model,&wte_T[0][0],d_model,vocab_size,&logits[0][0],!APPLY_ATTENTION_SCALING);
-    
-    max = -INFINITY;
-    int best_index = -1;
-    for (int i = 0; i < vocab_size; i++) {
-        float val = logits[0][i];
-        if (val > max) {
-            max = val;
-            best_index = i;  // <- save the index
+        if (val > top_k_values[smallest]) {
+            top_k_values[smallest] = val;
+            top_k_indices[smallest] = i;
         }
+        
+    }
+    printf("Top 10 logits:\n");
+    for (int i = 0; i < 10; i++) {
+        printf("Token %d, Logit = %.4f\n", top_k_indices[i], top_k_values[i]);
+    }
+        // 2. Pick random index from 0..4
+        int selected = rand() % 40;
+        int next_token = top_k_indices[selected];
+        tokens[n_tokens++] = next_token;
+        last_token_position++;
+
+        //snprintf(decode_request, sizeof(decode_request),
+        // "{\"mode\": \"decode\", \"tokens\": [%d]}", best_index);
+    }
+    
+    for (int i = 0; i < n_tokens; i++) {
+        snprintf(temp, sizeof(temp), "%d%s", tokens[i], (i < n_tokens - 1) ? "," : "");
+        strcat(token_list, temp);
     }
 
+    // Now format the decode_request
     snprintf(decode_request, sizeof(decode_request),
-         "{\"mode\": \"decode\", \"tokens\": [%d]}", best_index);
+    "{\"mode\": \"decode\", \"tokens\": [%s]}", token_list);
+
 
     send_json_to_tokenizer(decode_request, decode_response);
     printf("Decode Response: %s\n", decode_response);
