@@ -4,3 +4,5 @@ out/*
 transformers_env/
 .vscode/
 gpt2_weights.bin
+gpt2.dSYM/*
+.DS_Store/*

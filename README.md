@@ -94,3 +94,12 @@ Differences compared to the original attention is all you need paper
 ==> No cross attention (since only the decoder is used)
 ==> Layer norm moved to before Masked Multi head attention and before the FF 
 ==> Another layer norm added before the Linear layer
+
+## install ARM brew 
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+## install jansson
+/opt/homebrew/bin/brew install jansson
+## build and link the right lib
+ gcc temp_json.c -I/opt/homebrew/include -L/opt/homebrew/lib -ljansson -o main
+
+gcc -I/opt/homebrew/include -L/opt/homebrew/lib -ljansson -O3 -DUSE_ACCELERATE -DACCELERATE_NEW_LAPACK -framework Accelerate gpt2.c -o ./out/gpt2

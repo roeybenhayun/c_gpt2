@@ -1,0 +1,16 @@
+
+=======================================================================================================
+Hugging Face Weights                                        |   c ptr name          |   c struct name
+=======================================================================================================
+ln_1.weight with shape torch.Size([768])                        ln1_gamma           layer_norm1_gamma
+ln_1.bias with shape torch.Size([768])                          ln1_beta            layer_norm1_beta
+attn.c_attn.weight with shape torch.Size([768, 2304])  (T)      NA                  temp_attn_weight
+attn.c_attn.bias with shape torch.Size([2304])                  NA                  temp_attn_bias
+c_proj.weight with shape torch.Size([768, 768])        (T)      attn_proj_weight    attn_proj_weight
+c_proj.bias with shape torch.Size([768])                        attn_proj_bias      attn_proj_bias
+ln_2.weight with shape torch.Size([768])                        ln2_gamma           layer_norm2_gamma
+ln_2.bias with shape torch.Size([768])                          ln2_beta            layer_norm2_beta
+mlp.c_fc.weight with shape torch.Size([768, 3072])      (T)     W1                  W1
+mlp.c_fc.bias with shape torch.Size([3072])                     b1                  b1
+c_proj.weight with shape torch.Size([3072, 768])        (T)     W2                  W2
+mlp.c_proj.bias with shape torch.Size([768])                    b2                  b2

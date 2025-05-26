@@ -21,6 +21,7 @@ def handle_request(data):
         elif mode == "decode":
             print("Decode request received...")
             tokens = req.get("tokens", [])
+            print(tokens)
             text = tokenizer.decode(tokens)
             return json.dumps({"text": text})
         else:
