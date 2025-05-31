@@ -831,7 +831,7 @@ int main()
     }//main loop
 
     
-    FILE *json_out = fopen("tensor_output.json", "w");
+    FILE *json_out = fopen("logs/tensor_output.json", "w");
     json_dumpf(json_root, json_out, JSON_INDENT(4));
     fclose(json_out);
     json_decref(json_root);
