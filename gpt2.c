@@ -1,7 +1,19 @@
+/// TODO
+// * Add non optimzed 2d dot product (mainly for performance comparison)
+// * Change to loop to output token by token (instead of all at once)
+// * Move the token selection logic into a separate function
+// * Add KV cache
+// * CLI arg for temperature
+// * CLI arg for top_k
+// * CLI atg for top_p
+// * CLI arg for max tokens 
+// * Function to cleanup data structures
+// * calc time to token output
+// * Update layer names consistently
+
 #include <math.h>
 #include <stdio.h>
 #include <time.h>
-// tokenizer_client.c
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,11 +36,11 @@
 #define APPLY_ATTENTION_SCALING (1)
 #define PI (3.14159265358979323846)
 
-void print_2d_tensor(char* name, float *a, int a_r_full_dim, int a_c_full_dim, int r_idx_to_print, int c_idx_to_print, int enable);
-float mean_(float *x, int len);
-float variance_(float *x,int len, float mean);
-void softmax_2d(float *a, int a_r, int a_c, int stride, float * c_out);
-void dot_2d(float *a, // Matrix A (input)
+static void print_2d_tensor(char* name, float *a, int a_r_full_dim, int a_c_full_dim, int r_idx_to_print, int c_idx_to_print, int enable);
+static float mean_(float *x, int len);
+static float variance_(float *x,int len, float mean);
+static void softmax_2d(float *a, int a_r, int a_c, int stride, float * c_out);
+static void dot_2d(float *a, // Matrix A (input)
             int a_r, // a rows
             int a_c, // a column
             int lda, // leading dim a
@@ -43,28 +55,15 @@ void dot_2d(float *a, // Matrix A (input)
             int transpose_b, // 
             int apply_attention_scaling 
         );
-void transpose_2d(float *a, int a_r, int a_c, float*b);
-void layernorm_2d(float *a, int a_r, int a_c,float * ln_gamma, float * ln_beta,float * out, float epsilon);
-float gelu(float x);
-void gelu_2d(float *a,int a_c, int a_r, float *out);
-void apply_casual_masking(float * a, int a_c,int size);
-
-void dot_2d_debug(float *a, int a_r, int a_c,
-    float *b, int b_r, int b_c,
-    float *out) {
-    for (int i = 0; i < a_r; i++) {
-    for (int j = 0; j < b_c; j++) {
-    float sum = 0.0f;
-    for (int k = 0; k < a_c; k++) {
-      sum += a[i * a_c + k] * b[k * b_c + j];
-    }
-    out[i * b_c + j] = sum;
-    }
-    }
-}
+static void transpose_2d(float *a, int a_r, int a_c, float*b);
+static void layernorm_2d(float *a, int a_r, int a_c,float * ln_gamma, float * ln_beta,float * out, float epsilon);
+static float gelu(float x);
+static void gelu_2d(float *a,int a_c, int a_r, float *out);
+static void apply_casual_masking(float * a, int a_c,int size);
 
 
-void add_tensor_to_layer(json_t *layer_obj, const char *tensor_name, float *a, int a_r, int a_c, int r_idx, int c_idx) {
+
+static void add_tensor_to_layer(json_t *layer_obj, const char *tensor_name, float *a, int a_r, int a_c, int r_idx, int c_idx) {
     json_t *tensor_array = json_array();
     for (int i = 0; i < r_idx; i++) {
         json_t *row = json_array();
@@ -77,7 +76,7 @@ void add_tensor_to_layer(json_t *layer_obj, const char *tensor_name, float *a, i
     json_object_set_new(layer_obj, tensor_name, tensor_array);
 }
 
-void send_json_to_tokenizer(const char *json_str, char *response_buf) {
+static void send_json_to_tokenizer(const char *json_str, char *response_buf) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         perror("Socket creation failed");
@@ -108,10 +107,8 @@ void send_json_to_tokenizer(const char *json_str, char *response_buf) {
     close(sock);
 }
 
-// TODO 
-// * Numerical stability - substract the row's max is the standard trick
-// * Batch support - softmax_3d()
-void softmax_2d(float *a, int a_r, int a_c,int stride, float * c_out){    
+
+static void softmax_2d(float *a, int a_r, int a_c,int stride, float * c_out){    
     for (int i=0; i<a_r; i++){
         // 1. Find the maximum value in the current row
         float row_max = -INFINITY;
@@ -125,34 +122,20 @@ void softmax_2d(float *a, int a_r, int a_c,int stride, float * c_out){
         for (int j = 0; j < a_c; j++) {
             float shifted = *(a + i * stride + j) - row_max;
             float exp_val = expf(shifted);
-            //if (i == 1) { // Only print for token 1
-            //    printf("i=%d j=%d raw=%.4f shifted=%.4f exp=%.6f\n", 
-            //           i, j, *(a + i * stride + j), shifted, exp_val);
-            //}
             *(c_out + i * stride + j) = exp_val;
             sum_exp += exp_val;
         }
         if (sum_exp == 0.0f && i == 1) {
-            printf("⚠️  WARNING: softmax sum_exp == 0 at row i=%d — input may be all -inf\n", i);
+            printf("WARNING: softmax sum_exp == 0 at row i=%d — input may be all -inf\n", i);
         }
         // 3. Normalize
         for (int j = 0; j < a_c; j++) {
             *(c_out + i * stride + j) /= sum_exp;
-        }
-        // ✅ Add this here — after normalization
-        //if (i == 1) {
-        //    printf("✅ softmax row 1 output: ");
-        //    for (int j = 0; j < a_c; j++) {
-        //        printf("%.4f ", *(c_out + i * stride + j));
-        //    }
-        //    printf("\nsum_exp = %f",sum_exp);
-        //    printf("\n");
-        //}                 
+        }                 
     }
 }
-// switched to float for higher precision
-// calc matched python code
-void dot_2d(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,int ldb, float* c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
+
+static void dot_2d(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,int ldb, float* c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
 #ifdef USE_ACCELERATE
 float alpha = 1.0f;
 if (apply_attention_scaling) {
@@ -221,7 +204,7 @@ cblas_sgemm(CblasRowMajor,  // row major order
 }
 
 
-void apply_casual_masking(float * a, int a_c, int size){
+static void apply_casual_masking(float * a, int a_c, int size){
     for (int i = 0; i < size; i++) {
         for (int j = i + 1; j < size; j++) {
             a[i * a_c + j] = -INFINITY;
@@ -230,7 +213,7 @@ void apply_casual_masking(float * a, int a_c, int size){
 }
 
 //prints start from 0 both for row and column
-void print_2d_tensor(char* name, float *a, int a_r_full_dim, int a_c_full_dim, int r_idx_to_print, int c_idx_to_print, int enable) {
+static void print_2d_tensor(char* name, float *a, int a_r_full_dim, int a_c_full_dim, int r_idx_to_print, int c_idx_to_print, int enable) {
     if (!enable) {
         return;
     }
@@ -250,23 +233,9 @@ void print_2d_tensor(char* name, float *a, int a_r_full_dim, int a_c_full_dim, i
     }
     printf("]\n");
 }
-void print_2d_tensor_to_file(FILE *f, float *a, int a_r, int a_c, int r_idx, int c_idx)
-{
-    fprintf(f, "[\n");
-    for (int i = 0; i < r_idx; i++) {
-        fprintf(f, "  [");
-        for (int j = 0; j < c_idx; j++) {
-            fprintf(f, " %6.2f", *(a + i * a_c + j));
-            if (j < c_idx - 1) fprintf(f, ",");
-        }
-        fprintf(f, " ]");
-        if (i < r_idx - 1) fprintf(f, ",\n");
-        else fprintf(f, "\n");
-    }
-    fprintf(f, "]\n");
-}
 
-void transpose_2d(float *a, int a_r, int a_c, float*b){
+
+static void transpose_2d(float *a, int a_r, int a_c, float*b){
 // TODO input check
     for (int i=0; i<a_r; i++){
         for (int j=0; j<a_c; j++){
@@ -274,8 +243,8 @@ void transpose_2d(float *a, int a_r, int a_c, float*b){
         }
     }
 }
-// TODO - add the math expression
-void layernorm_2d(float *a, int a_r, int a_c, 
+
+static void layernorm_2d(float *a, int a_r, int a_c, 
                     float * ln_gamma, float * ln_beta,
                     float * out, float epsilon){
     
@@ -289,7 +258,7 @@ void layernorm_2d(float *a, int a_r, int a_c,
     }
 }
 
-void add_2d(float *a, int a_r, int a_c, float *b, float *out){
+static void add_2d(float *a, int a_r, int a_c, float *b, float *out){
     for (int i=0; i<a_r; i++){
         for (int j=0; j<a_c; j++){
             *(out +i*a_c + j) = *(a +i*a_c + j) + *(b +i*a_c + j);
@@ -298,7 +267,7 @@ void add_2d(float *a, int a_r, int a_c, float *b, float *out){
 }
 
 // if out is null addition is inplace 
-void add_bias_2d(float *a, int a_r, int a_c, float *b, float *out){
+static void add_bias_2d(float *a, int a_r, int a_c, float *b, float *out){
     float * tmp = out;
     if (out == NULL){ //inplace
         tmp = a;
@@ -310,14 +279,14 @@ void add_bias_2d(float *a, int a_r, int a_c, float *b, float *out){
     }
 }
 
-float mean_(float *x, int len){
+static float mean_(float *x, int len){
     float sum = 0.0;
     for (int i=0; i<len; i++){
         sum += *(x+i);
     }
     return (sum/(float)len);
 }
-float variance_(float *x,int len, float mean){
+static float variance_(float *x,int len, float mean){
     float sum = 0.0;
     for (int i=0; i<len; i++){
         sum += pow(((*(x+i)) - mean),2);
@@ -325,12 +294,12 @@ float variance_(float *x,int len, float mean){
     return (sum/(float)len);
 }
 
-float gelu(float x){
+static float gelu(float x){
     float term = sqrt(2.0/PI);
     return 0.5 * x * (1 + tanh (term * (x + 0.044715*pow(x,3))));
 }
 
-void gelu_2d(float *a,int a_c, int a_r, float *out){
+static void gelu_2d(float *a,int a_c, int a_r, float *out){
     float * tmp = out;
     if (out == NULL){ //inplace
         tmp = a;
@@ -343,19 +312,18 @@ void gelu_2d(float *a,int a_c, int a_r, float *out){
 }
 
 //// Globals /// 
+struct timespec start,end;
 
 // GPT2 small
 const int d_model = 768;
 const int ctx_len = 1024;
 const float eps = 0.00001;
-struct timespec start,end;
 const int num_layers = 12;
 const int vocab_size = 50257;
 const int nof_heads = 12;
 const int head_dim = d_model/nof_heads;
 const int d_ff = d_model * 4;
-// TODO: Tokenizer block
-// TODO: Positional Embeddings
+
 float wte[vocab_size][d_model] = {};
 float wte_T[d_model][vocab_size] = {};
 
@@ -409,8 +377,6 @@ float attn_proj_bias[d_model] = {};
 
 float logits[ctx_len][vocab_size] = {};
 
-//float attentions_scores_head[ctx_len][nof_heads][ctx_len];
-//float attention_weights_head[ctx_len][nof_heads][ctx_len];
 float context_heads[nof_heads][ctx_len][head_dim];
 float scores_h[ctx_len][ctx_len];
 float weights_h[ctx_len][ctx_len];
@@ -438,7 +404,7 @@ typedef struct{
 
 
 int glob_idx = 0;
-void transformer_block(float *input,int n_tokens,
+static void transformer_block(float *input,int n_tokens,
                         TransformerBlockParams * tbp,json_t *json_root,int layer_id,int token_idx
                         ){
     
@@ -447,8 +413,8 @@ void transformer_block(float *input,int n_tokens,
     json_t *layer_obj = json_object();
     
     // Layer Norm 1
-    printf("--- Layer (Detailed Log) ---\n");
-    printf("Input:\n");
+    //printf("--- Layer (Detailed Log) ---\n");
+    //printf("Input:\n");
 
     layernorm_2d(input,n_tokens,d_model,tbp->ln1_gamma,tbp->ln1_beta, &X_norm[0][0],eps);
     print_2d_tensor("LN1 X_norm[1][:10]:",&X_norm[1][0],ctx_len,d_model,1,10,0);
@@ -557,7 +523,7 @@ void transformer_block(float *input,int n_tokens,
 
 }
 
-int parse_tokens(const char *json, int *tokens, int max_tokens) {
+static int parse_tokens(const char *json, int *tokens, int max_tokens) {
     const char *start = strchr(json, '[');
     const char *end = strchr(json, ']');
     if (!start || !end || start > end) return -1; // Invalid format
@@ -588,14 +554,14 @@ int parse_tokens(const char *json, int *tokens, int max_tokens) {
     return count; // number of tokens parsed
 }
 
-void fread_or_exit(void *ptr, size_t size, size_t count, FILE *fp) {
+static void fread_or_exit(void *ptr, size_t size, size_t count, FILE *fp) {
     if (fread(ptr, size, count, fp) != count) {
         fprintf(stderr, "Error: fread failed or unexpected EOF.\n");
         exit(1);
     }
 }
 
-void load_layers_weights(TransformerBlockParams * p_tfb, int layer_id,FILE * fp){
+static void load_layers_weights(TransformerBlockParams * p_tfb, int layer_id,FILE * fp){
     
     fread_or_exit(p_tfb->ln1_gamma, sizeof(float), d_model, fp);//ln_1.weight (768)
     fread_or_exit(p_tfb->ln1_beta,  sizeof(float), d_model, fp);//ln_1.bias (768)
@@ -640,11 +606,8 @@ int main()
     char decode_response[2048];
     int tokens[n_tokens] = {0};
     char token_list[8192] = {0};
-    int best_index = -1;
     
 
-    float max = 0.0;
-    int predicted_token_index = 0;
     long offset = (vocab_size * d_model + ctx_len * d_model) * sizeof(float);
     char temp[32];
     
@@ -675,19 +638,16 @@ int main()
     
     json_t *json_root = json_object();
     
-
     fread_or_exit(wte,sizeof(float),vocab_size*d_model,fp);
     fread_or_exit(wpe,sizeof(float),ctx_len*d_model,fp);
-
-    
-    float temperature = 0.9;
     transpose_2d(&wte[0][0], vocab_size,d_model , &wte_T[0][0]);
+
+
+    float temperature = 0.9;
+    int max_out_tokens = 30;
 
     while(1){ 
         
-        int max_out_tokens = 30;
-        memset(tokens,0,sizeof(tokens));
-
         printf("Enter Input:");
         // Input
         fgets(input_buffer, sizeof(input_buffer), stdin);
@@ -697,11 +657,11 @@ int main()
             break;
         }
 
-        
         clock_gettime(CLOCK_MONOTONIC, &start);
         printf("GPT2 Inference - Start\n");
 
         // cleanup, move to the end (move to function)
+        memset(tokens,0,sizeof(tokens));
         memset(embeddings,0,sizeof(embeddings));            
         memset(encode_request, 0, sizeof(encode_request));
         memset(encode_response, 0, sizeof(encode_response));
@@ -725,7 +685,7 @@ int main()
         
         int last_token_position = n_tokens - 1; 
         int ii = 0;
-        for (; ii < max_out_tokens; ii++){   
+        for (; ii < max_out_tokens; ii++){  
 
             // --- Reset top_k arrays ---
             int top_k_indices[40];
@@ -747,10 +707,9 @@ int main()
             fseek(fp, offset, SEEK_SET);
             // Infer
             for (int i=0 ; i < num_layers; i++){
-                printf("File position before layer %d = %ld\n", i, ftell(fp));
+                //printf("File position before layer %d = %ld\n", i, ftell(fp));
                 load_layers_weights(&layer, i,fp);
-                printf("embeddings (input to transformer):\n");
-                printf("nof_tokens=%d\n",n_tokens);
+                //printf("nof_tokens=%d\n",n_tokens);
                                                 
                 transformer_block(&embeddings[0][0],n_tokens,&layer,json_root,i,ii);
                 
@@ -758,7 +717,7 @@ int main()
                 memset(&embeddings[0][0], 0, sizeof(float) * ctx_len * d_model);
                 // use the output from this block as the input to the next block
                 memcpy(&embeddings[0][0], &residual2_out[0][0], sizeof(float) * n_tokens * d_model);
-                printf("*****Layer %d completed******\n",i);
+                //printf("*****Layer %d completed******\n",i);
 
             }
 
@@ -779,106 +738,105 @@ int main()
 
 
         
-        // --- Search the top 5 ---
-        float *logit_row = &logits[last_token_position][0];
+            // --- Search the top 5 ---
+            float *logit_row = &logits[last_token_position][0];
 
-        // Softmax with temperature and numerical stability
+            // Softmax with temperature and numerical stability
             float max_logit = -INFINITY;
             for (int i = 0; i < vocab_size; i++) {
                 float val = logit_row[i] / temperature;
                 if (val > max_logit) max_logit = val;
-        }
-
-        // Compute probabilities
-        float probs[vocab_size];
-        float sum = 0.0;
-        for (int i = 0; i < vocab_size; i++) {
-            float val = (logit_row[i] / temperature) - max_logit;
-            probs[i] = expf(val);
-            sum += probs[i];
-        }
-
-        // Normalize
-        for (int i = 0; i < vocab_size; i++) {
-            probs[i] /= sum;
-        }
-
-        // Sample from probability distribution
-        float r = (float)rand() / RAND_MAX;
-        float cumulative = 0.0;
-        int sampled_token = -1;
-        for (int i = 0; i < vocab_size; i++) {
-            cumulative += probs[i];
-            if (r < cumulative) {
-                sampled_token = i;
-                break;
             }
-        }
 
+            // Compute probabilities
+            float probs[vocab_size];
+            float sum = 0.0;
+            for (int i = 0; i < vocab_size; i++) {
+                float val = (logit_row[i] / temperature) - max_logit;
+                probs[i] = expf(val);
+                sum += probs[i];
+            }
 
-        //// Use sampled_token as your predicted next token
-        tokens[n_tokens++] = sampled_token;
-        last_token_position++;
+            // Normalize
+            for (int i = 0; i < vocab_size; i++) {
+                probs[i] /= sum;
+            }
 
-                // Find top 10 tokens by probability
-        int top_indices[10] = {0};
-        float top_probs[10] = {-1};
-
-        for (int i = 0; i < vocab_size; i++) {
-            for (int j = 0; j < 10; j++) {
-                if (probs[i] > top_probs[j]) {
-                    // Shift down
-                    for (int k = 9; k > j; k--) {
-                        top_probs[k] = top_probs[k - 1];
-                        top_indices[k] = top_indices[k - 1];
-                    }
-                    // Insert
-                    top_probs[j] = probs[i];
-                    top_indices[j] = i;
+            // Sample from probability distribution
+            float r = (float)rand() / RAND_MAX;
+            float cumulative = 0.0;
+            int sampled_token = -1;
+            for (int i = 0; i < vocab_size; i++) {
+                cumulative += probs[i];
+                if (r < cumulative) {
+                    sampled_token = i;
                     break;
                 }
             }
-    }
+
+
+            //// Use sampled_token as your predicted next token
+            tokens[n_tokens++] = sampled_token;
+            last_token_position++;
+
+                    // Find top 10 tokens by probability
+            int top_indices[10] = {0};
+            float top_probs[10] = {-1};
+
+            for (int i = 0; i < vocab_size; i++) {
+                for (int j = 0; j < 10; j++) {
+                    if (probs[i] > top_probs[j]) {
+                        // Shift down
+                        for (int k = 9; k > j; k--) {
+                            top_probs[k] = top_probs[k - 1];
+                            top_indices[k] = top_indices[k - 1];
+                        }
+                        // Insert
+                        top_probs[j] = probs[i];
+                        top_indices[j] = i;
+                        break;
+                    }
+                }
+            }
+
+            printf("Top 10 predicted tokens:\n");
+            for (int i = 0; i < 10; i++) {
+                printf("Token %d: Prob = %.4f\n", top_indices[i], top_probs[i]);
+            }
+
+        }
+    
+        for (int i = 0; i < n_tokens; i++) {
+            printf("*******TOKEN = %d *****\n",tokens[i]);
+            snprintf(temp, sizeof(temp), "%d%s", tokens[i], (i < n_tokens - 1) ? "," : "");
+            strcat(token_list, temp);
+        }
+
+        // Now format the decode_request
+        snprintf(decode_request, sizeof(decode_request),
+        "{\"mode\": \"decode\", \"tokens\": [%s]}", token_list);
+
+
+        send_json_to_tokenizer(decode_request, decode_response);
+        printf("Decode Response: %s\n", decode_response);
+
+
+        printf("*****Final layer norm completed\n");
+
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        float elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+        printf("GPT2 Inference - End\n");
+        printf("Inference time =  %.2f seconds\n",elapsed);
+    
+    }//main loop
 
     
-
-    printf("Top 10 predicted tokens:\n");
-    for (int i = 0; i < 10; i++) {
-        printf("Token %d: Prob = %.4f\n", top_indices[i], top_probs[i]);
-    }
-
-    }
-    
-    for (int i = 0; i < n_tokens; i++) {
-        printf("*******TOKEN = %d *****\n",tokens[i]);
-        snprintf(temp, sizeof(temp), "%d%s", tokens[i], (i < n_tokens - 1) ? "," : "");
-        strcat(token_list, temp);
-    }
-
-    // Now format the decode_request
-    snprintf(decode_request, sizeof(decode_request),
-    "{\"mode\": \"decode\", \"tokens\": [%s]}", token_list);
-
-
-    send_json_to_tokenizer(decode_request, decode_response);
-    printf("Decode Response: %s\n", decode_response);
-
-
-    printf("*****Final layer norm completed\n");
-
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    float elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
-    printf("GPT2 Inference - End\n");
-    printf("Inference time =  %.2f seconds\n",elapsed);
-    
-    }
     FILE *json_out = fopen("tensor_output.json", "w");
     json_dumpf(json_root, json_out, JSON_INDENT(4));
     fclose(json_out);
     json_decref(json_root);
 
     fclose(fp);
-
 
     return 1;
 }
