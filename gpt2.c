@@ -10,6 +10,7 @@
 // * Function to cleanup data structures
 // * calc time to token output
 // * Update layer names consistently
+// * Save ~147MB by using remove wte_T and use in dot_2d with transposed flag 
 
 #include <math.h>
 #include <stdio.h>
@@ -350,8 +351,8 @@ float b_q[d_model] = {}; // learnable
 float b_k[d_model] = {}; // learnable
 float b_v[d_model] = {}; // learnable
 
-float temp_attn_weight[3*d_model][d_model]; // 2304 = 768 * 3
-float temp_attn_bias[3*d_model];
+float temp_attn_weight[3*d_model][d_model] = {}; // 2304 = 768 * 3
+float temp_attn_bias[3*d_model] = {};
 
 float Q[ctx_len][d_model] = {};
 float K[ctx_len][d_model] = {};
@@ -377,10 +378,10 @@ float attn_proj_bias[d_model] = {};
 
 float logits[ctx_len][vocab_size] = {};
 
-float context_heads[nof_heads][ctx_len][head_dim];
-float scores_h[ctx_len][ctx_len];
-float weights_h[ctx_len][ctx_len];
-float final_attention_output[ctx_len][d_model]; 
+float context_heads[nof_heads][ctx_len][head_dim] = {};
+float scores_h[ctx_len][ctx_len] = {};
+float weights_h[ctx_len][ctx_len] = {};
+float final_attention_output[ctx_len][d_model] = {}; 
 
 typedef struct{
     float * W_q;
@@ -658,7 +659,7 @@ int main()
         }
 
         clock_gettime(CLOCK_MONOTONIC, &start);
-        printf("GPT2 Inference - Start\n");
+        printf("\nGPT2 Inference - Start\n");
 
         // cleanup, move to the end (move to function)
         memset(tokens,0,sizeof(tokens));
@@ -674,14 +675,14 @@ int main()
          "{\"mode\": \"encode\", \"text\": \"%s\"}", input_buffer);
          // Get tokens
         send_json_to_tokenizer(encode_request, encode_response);
-        printf("Encode Response: %s\n", encode_response);
+        //printf("Encode Response: %s\n", encode_response);
         // Format
         int n_tokens = parse_tokens(encode_response, tokens, ctx_len);
         if (n_tokens < 0) {
             printf("Failed to parse tokens!\n");
             continue;
         }
-        printf("Parsed %d tokens\n",n_tokens);
+        //printf("Parsed %d tokens\n",n_tokens);
         
         int last_token_position = n_tokens - 1; 
         int ii = 0;
@@ -799,15 +800,15 @@ int main()
                 }
             }
 
-            printf("Top 10 predicted tokens:\n");
-            for (int i = 0; i < 10; i++) {
-                printf("Token %d: Prob = %.4f\n", top_indices[i], top_probs[i]);
-            }
+            //printf("Top 10 predicted tokens:\n");
+            //for (int i = 0; i < 10; i++) {
+            //    printf("Token %d: Prob = %.4f\n", top_indices[i], top_probs[i]);
+            //}
 
         }
     
         for (int i = 0; i < n_tokens; i++) {
-            printf("*******TOKEN = %d *****\n",tokens[i]);
+            //printf("*******TOKEN = %d *****\n",tokens[i]);
             snprintf(temp, sizeof(temp), "%d%s", tokens[i], (i < n_tokens - 1) ? "," : "");
             strcat(token_list, temp);
         }
@@ -818,15 +819,13 @@ int main()
 
 
         send_json_to_tokenizer(decode_request, decode_response);
-        printf("Decode Response: %s\n", decode_response);
+        printf("\nDecode Response: %s\n", decode_response);
 
-
-        printf("*****Final layer norm completed\n");
 
         clock_gettime(CLOCK_MONOTONIC, &end);
         float elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
-        printf("GPT2 Inference - End\n");
-        printf("Inference time =  %.2f seconds\n",elapsed);
+        printf("\nGPT2 Inference - End\n");
+        printf("\nTime to first token (approx. no KV Cache, short )  %.2f seconds\n",elapsed/max_out_tokens);
     
     }//main loop
 
