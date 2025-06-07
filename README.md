@@ -44,9 +44,10 @@ wget https://huggingface.co/gpt2/resolve/main/config.json
 /opt/homebrew/bin/brew install jansson
 
 ### How to build?
-gcc -Wall -I/opt/homebrew/include -L/opt/homebrew/lib -ljansson -O3 -DUSE_ACCELERATE -DACCELERATE_NEW_LAPACK -framework Accelerate gpt2.c -o ./out/gpt2How 
+gcc -Wall -I/opt/homebrew/include -L/opt/homebrew/lib -ljansson -O3 -DUSE_ACCELERATE -DACCELERATE_NEW_LAPACK -framework Accelerate gpt2.c -o ./out/gpt2
 
 ### How to run?
+./out/gpt2
 #### Activate venv:
 * source transformers_env/bin/activate
 
