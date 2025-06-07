@@ -62,7 +62,92 @@ static float gelu(float x);
 static void gelu_2d(float *a,int a_c, int a_r, float *out);
 static void apply_casual_masking(float * a, int a_c,int size);
 
+typedef struct {
+    float prob;
+    int index;
+} TokenProb;
 
+// Comparison function for qsort
+// It sorts TokenProb structs in DESCENDING order of their 'prob' field.
+int compareTokenProbs(const void *a, const void *b) {
+    const TokenProb *tokenA = (const TokenProb *)a;
+    const TokenProb *tokenB = (const TokenProb *)b;
+
+    if (tokenA->prob < tokenB->prob) {
+        return 1;  // Return positive if A's prob is smaller (A comes after B)
+    }
+    if (tokenA->prob > tokenB->prob) {
+        return -1; // Return negative if A's prob is larger (A comes before B)
+    }
+    return 0;      // Probabilities are equal
+}
+
+/**
+ * @brief Performs Top-K sampling from a given probability distribution.
+ *
+ * This function identifies the K most probable tokens, renormalizes their
+ * probabilities, and provides them for subsequent sampling.
+ *
+ * @param probs               Pointer to the full probability distribution (from softmax).
+ * @param vocab_size          The total size of the vocabulary.
+ * @param k                   The number of top tokens to consider. If k <= 0 or k > vocab_size,
+ * it defaults to vocab_size (equivalent to multinomial sampling).
+ * @param top_k_indices_out   Output array to store the indices of the top K tokens.
+ * Must be pre-allocated by the caller to a size of at least 'k'.
+ * @param top_k_probs_out     Output array to store the renormalized probabilities of the top K tokens.
+ * Must be pre-allocated by the caller to a size of at least 'k'.
+ */
+void top_k_sample(float *probs, int vocab_size, int k,
+                  int *top_k_indices_out, float *top_k_probs_out) {
+
+    // Ensure k is within a valid range. If k is too large, it defaults to multinomial sampling.
+    if (k <= 0 || k > vocab_size) {
+        k = vocab_size;
+    }
+
+    // Declare a local (stack-allocated) array of TokenProb structs.
+    // This is valid in C99 as a Variable Length Array (VLA) if vocab_size
+    // is not a compile-time constant, but for large vocab_size (like 50257),
+    // this can cause stack overflow. For robustness, global/static or dynamic
+    // allocation (malloc) is usually preferred for very large arrays.
+    // However, adhering to the "no dynamic allocation" constraint:
+    TokenProb token_probs_list[vocab_size];
+
+    // 1. Populate the list of (probability, original_index) pairs
+    for (int i = 0; i < vocab_size; i++) {
+        token_probs_list[i].prob = probs[i];
+        token_probs_list[i].index = i;
+    }
+
+    // 2. Sort the list in descending order of probabilities
+    // qsort modifies the array in-place.
+    qsort(token_probs_list, vocab_size, sizeof(TokenProb), compareTokenProbs);
+
+    // 3. Extract the top K tokens and their probabilities
+    float sum_top_k_probs = 0.0f;
+    for (int i = 0; i < k; i++) {
+        top_k_indices_out[i] = token_probs_list[i].index;
+        top_k_probs_out[i] = token_probs_list[i].prob;
+        sum_top_k_probs += token_probs_list[i].prob;
+    }
+
+    // 4. Renormalize the probabilities of the top K tokens
+    // This makes sure they sum to 1.0 again for accurate sampling.
+    if (sum_top_k_probs > 0.0f) { // Avoid division by zero if all top K probabilities were 0
+        for (int i = 0; i < k; i++) {
+            top_k_probs_out[i] /= sum_top_k_probs;
+        }
+    } else {
+        // Fallback: If sum_top_k_probs is 0 (e.g., all top K tokens had 0 probability),
+        // distribute probability uniformly among them to allow sampling.
+        // This scenario is rare with a proper softmax output.
+        if (k > 0) {
+            for (int i = 0; i < k; i++) {
+                top_k_probs_out[i] = 1.0f / k;
+            }
+        }
+    }
+}
 
 static void add_tensor_to_layer(json_t *layer_obj, const char *tensor_name, float *a, int a_r, int a_c, int r_idx, int c_idx) {
     json_t *tensor_array = json_array();
@@ -173,6 +258,7 @@ cblas_sgemm(CblasRowMajor,  // row major order
         );
 
 #else    
+#error not implemented as it wont be functional in the naive way
     float dot_product = 0.0;
     float dot_product_sum = 0.0;
     float scale_factor = 1.0;
@@ -382,6 +468,9 @@ float context_heads[nof_heads][ctx_len][head_dim] = {};
 float scores_h[ctx_len][ctx_len] = {};
 float weights_h[ctx_len][ctx_len] = {};
 float final_attention_output[ctx_len][d_model] = {}; 
+
+
+
 
 typedef struct{
     float * W_q;
@@ -644,7 +733,7 @@ int main()
     transpose_2d(&wte[0][0], vocab_size,d_model , &wte_T[0][0]);
 
 
-    float temperature = 0.9;
+    float temperature = 1.0;
     int max_out_tokens = 30;
 
     while(1){ 
@@ -738,7 +827,7 @@ int main()
             print_2d_tensor("C logits[1][i]",&logits[1][0],ctx_len,vocab_size,1,10,0);
 
 
-        
+            //===========================================SOFTMAX START===================================//
             // --- Search the top 5 ---
             float *logit_row = &logits[last_token_position][0];
 
@@ -762,48 +851,55 @@ int main()
             for (int i = 0; i < vocab_size; i++) {
                 probs[i] /= sum;
             }
+            //===========================================SOFTMAX END===================================//
 
+            //===========================================MULTINOMIAL Sampling START===================================//
             // Sample from probability distribution
+            //float r = (float)rand() / RAND_MAX;
+            //float cumulative = 0.0;
+            //int sampled_token = -1;
+            //for (int i = 0; i < vocab_size; i++) {
+            //    cumulative += probs[i];
+            //    if (r < cumulative) {
+            //        sampled_token = i;
+            //        break;
+            //    }
+            //}
+            // --- Apply Top-K Sampling ---
+            int top_k_val = 40; // Choose your desired K value (e.g., 40, 50, 100)
+            // Ensure these arrays are large enough to hold 'top_k_val' elements
+            int selected_indices[vocab_size]; // Use vocab_size as max possible K, or pass actual max_k
+            float selected_probs[vocab_size]; // Same here
+
+            //printf("top-k-sample\n");
+            top_k_sample(probs, vocab_size, top_k_val, selected_indices, selected_probs);
+
+            // --- Now, sample from the top_k_val chosen tokens ---
             float r = (float)rand() / RAND_MAX;
-            float cumulative = 0.0;
-            int sampled_token = -1;
-            for (int i = 0; i < vocab_size; i++) {
-                cumulative += probs[i];
-                if (r < cumulative) {
-                    sampled_token = i;
+            float cumulative_sampled_probs = 0.0;
+            int sampled_token = -1; // This will store the final token index
+
+            for (int i = 0; i < top_k_val; i++) { // Loop only through the top K tokens
+                cumulative_sampled_probs += selected_probs[i];
+                if (r < cumulative_sampled_probs) {
+                    sampled_token = selected_indices[i]; // Use the index from the top_k_indices array
                     break;
                 }
             }
 
+            // If r is very close to 1.0 due to float precision, it might exceed cumulative_sampled_probs in rare cases.
+            // Fallback to the last token in the list if no token is explicitly sampled.
+            if (sampled_token == -1 && top_k_val > 0) {
+                sampled_token = selected_indices[top_k_val - 1];
+            }
 
             //// Use sampled_token as your predicted next token
             tokens[n_tokens++] = sampled_token;
             last_token_position++;
 
-                    // Find top 10 tokens by probability
-            int top_indices[10] = {0};
-            float top_probs[10] = {-1};
 
-            for (int i = 0; i < vocab_size; i++) {
-                for (int j = 0; j < 10; j++) {
-                    if (probs[i] > top_probs[j]) {
-                        // Shift down
-                        for (int k = 9; k > j; k--) {
-                            top_probs[k] = top_probs[k - 1];
-                            top_indices[k] = top_indices[k - 1];
-                        }
-                        // Insert
-                        top_probs[j] = probs[i];
-                        top_indices[j] = i;
-                        break;
-                    }
-                }
-            }
+            //===========================================MULTINOMIAL Sampling END===================================//
 
-            //printf("Top 10 predicted tokens:\n");
-            //for (int i = 0; i < 10; i++) {
-            //    printf("Token %d: Prob = %.4f\n", top_indices[i], top_probs[i]);
-            //}
 
         }
     

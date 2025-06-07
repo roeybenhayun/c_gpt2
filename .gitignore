@@ -7,3 +7,5 @@ gpt2_weights.bin
 gpt2.dSYM/*
 .DS_Store/*
 logs/*
+blog/*
+.DS_Store

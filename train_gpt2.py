@@ -261,20 +261,20 @@ class GPT(nn.Module):
         config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
         # create a from-scratch initialized minGPT model
         config = GPTConfig(**config_args)
-        model = GPT(config)
-        load_bin_weights_into_model(model, "gpt2_weights.bin")
+        model = GPT(GPTConfig())
+        #load_bin_weights_into_model(model, "gpt2_weights.bin")
         #print("*************ln_f weight***************")
         #print(model.transformer.ln_f.weight[:10].detach().numpy())
         #print("ln_f bias")
         #print(model.transformer.ln_f.bias[:10].detach().numpy())
-        return model
+        #return model
         ## load weights from bin 
-        ##sd = model.state_dict()
+        sd = model.state_dict()
         ## load weights from bin 
-        ##sd_keys = sd.keys()
+        sd_keys = sd.keys()
         #print(sd_keys)
         ## load weights from bin 
-        ##sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
+        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
         #print("after")
         #print(sd_keys)
         #exit
@@ -308,22 +308,23 @@ class GPT(nn.Module):
                 assert sd_hf[k].shape == sd[k].shape
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k])
-
+        print ("***MODEL****")
         return model
 ## Load the params from hf
-max_return_sequence = 1
-max_length = 10
+max_return_sequence = 5
+max_length = 30
 
 model = GPT.from_pretrained('gpt2')
 print("Model loaded successfully from huggingface gpt2!")
 model.eval()
 print("Model eval done")
-#import tiktoken
+import tiktoken
 from tokenizers import Tokenizer
-#enc = tiktoken.get_encoding("gpt2")
-enc = Tokenizer.from_file("../gpt2/tokenizer.json")
-
-tokens = enc.encode("the sky is blue").ids
+enc = tiktoken.get_encoding("gpt2")
+#enc = Tokenizer.from_file("../gpt2/tokenizer.json")
+tokens = enc.encode("Who is the founder of Ubuntu project?")
+# uncomment if using local json 
+#tokens = enc.encode("Who wrote the book the origin of species?").ids
 print("TOKENS:",tokens)
 tokens = torch.tensor(tokens,dtype=torch.long)
 # duplicate the tokens for the number of sequences we want to generate
