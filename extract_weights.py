@@ -20,7 +20,7 @@ for k, v in sd_hf.items():
 #exit
 if save_tp_file == True:
     # Open a binary file for writing
-    with open("gpt2_weights.bin", "wb") as f:
+    with open("gpt2_c_weights.bin", "wb") as f:
         for k, v in sd_hf.items():
             print(f"Saving: {k} with shape {v.shape}")        
             # Convert tensor to numpy array of float32

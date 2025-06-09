@@ -724,7 +724,7 @@ int main()
     printf("Loading GPT2 weights...\n");
     
     // Open the file containing the weights
-    FILE * fp = fopen("gpt2_weights.bin","rb");
+    FILE * fp = fopen("gpt2_c_weights.bin","rb");
     
     json_t *json_root = json_object();
     
