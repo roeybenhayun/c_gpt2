@@ -15,7 +15,14 @@ Due to python packages dep miss match importing/loading to cache the transformer
 So solution was to download the model and other model files 
 directly and use them
 
-### Get GPT2 weights
+## Download GPT2.C weights
+https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_c_weights.bin
+
+
+### Create GPT2.C weights
+Or you can download the following files and use extract_weights script to create 
+gpt2_c_weights.bin using extract_weights.py
+
 there is no need to clone the transformer repo
 you'll just need to download the GPT2 model fils and place them in "transformers/models/gpt2" directory
 
