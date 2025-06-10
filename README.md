@@ -26,6 +26,7 @@ gpt2_c_weights.bin using extract_weights.py
 there is no need to clone the transformer repo
 you'll just need to download the GPT2 model fils and place them in "transformers/models/gpt2" directory
 
+This file holds the weights (for GPT2 small)
 wget https://huggingface.co/gpt2/resolve/main/pytorch_model.bin 
 
 wget https://huggingface.co/gpt2/resolve/main/merges.txt
@@ -37,6 +38,17 @@ wget https://huggingface.co/gpt2/resolve/main/tokenizer_config.json
 wget https://huggingface.co/gpt2/resolve/main/config.json
 
 
+To get GPT2 medium weights use the following urls
+
+wget https://huggingface.co/gpt2-medium/resolve/main/pytorch_model.bin
+
+wget https://huggingface.co/gpt2-medium/resolve/main/merges.txt
+
+wget https://huggingface.co/gpt2-medium/resolve/main/vocab.json
+
+wget https://huggingface.co/gpt2-medium/resolve/main/tokenizer_config.json
+
+wget https://huggingface.co/gpt2-medium/resolve/main/config.json
 
 ## Compiler
 * gcc -v

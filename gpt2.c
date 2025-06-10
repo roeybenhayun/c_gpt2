@@ -401,13 +401,27 @@ static void gelu_2d(float *a,int a_c, int a_r, float *out){
 //// Globals /// 
 struct timespec start,end;
 
-// GPT2 small
-const int d_model = 768;
-const int ctx_len = 1024;
+#define GPT2_SMALL_MODEL
+
+#ifdef GPT2_SMALL_MODEL
+    const int d_model = 768;
+    const int ctx_len = 1024;
+    const int num_layers = 12;
+    const int vocab_size = 50257;
+    const int nof_heads = 12;
+    #define MODEL_WEIGHTS_FILENAME "gpt2_c_weights.bin"
+#elif defined(GPT2_MEDIUM_MODEL)
+    const int d_model = 1024; // GPT-2 Medium
+    const int ctx_len = 1024; // Same for GPT-2 Medium
+    const int num_layers = 24; // GPT-2 Medium
+    const int vocab_size = 50257; // Same
+    const int nof_heads = 16; // GPT-2 Medium
+    #define MODEL_WEIGHTS_FILENAME "gpt2_medium_c_weights.bin"
+#else
+    #error "No GPT-2 model size defined!"
+#endif
+
 const float eps = 0.00001;
-const int num_layers = 12;
-const int vocab_size = 50257;
-const int nof_heads = 12;
 const int head_dim = d_model/nof_heads;
 const int d_ff = d_model * 4;
 
@@ -685,17 +699,21 @@ static void load_layers_weights(TransformerBlockParams * p_tfb, int layer_id,FIL
     fread_or_exit(p_tfb->b2, sizeof(float), d_model, fp);//mlp.c_proj.bias
 
 }
+#define MAX_OUTPUT_TOKENS 1024 
+#define CHARS_PER_TOKEN 7
+#define MAX_TOKEN_LIST_CHARS (MAX_OUTPUT_TOKENS * CHARS_PER_TOKEN + 10) // 1024 tokens, up to 6 digits + comma/space, plus buffer
+#define MAX_JSON_REQUEST_CHARS (MAX_TOKEN_LIST_CHARS + 64) // For "\{\"mode\": \"decode\", \"tokens\": []}" wrapper
 
 int main()
 {
     const int n_tokens = 1024;
     char input_buffer[2048];    
-    char encode_request[2048];
-    char encode_response[2048];
-    char decode_request[2048];
-    char decode_response[2048];
+    char encode_request[MAX_JSON_REQUEST_CHARS];
+    char encode_response[MAX_JSON_REQUEST_CHARS];
+    char decode_request[MAX_JSON_REQUEST_CHARS];
+    char decode_response[MAX_JSON_REQUEST_CHARS];
     int tokens[n_tokens] = {0};
-    char token_list[8192] = {0};
+    char token_list[MAX_TOKEN_LIST_CHARS] = {0};
     
 
     long offset = (vocab_size * d_model + ctx_len * d_model) * sizeof(float);
@@ -724,7 +742,7 @@ int main()
     printf("Loading GPT2 weights...\n");
     
     // Open the file containing the weights
-    FILE * fp = fopen("gpt2_c_weights.bin","rb");
+    FILE * fp = fopen(MODEL_WEIGHTS_FILENAME,"rb");
     
     json_t *json_root = json_object();
     
@@ -734,7 +752,7 @@ int main()
 
 
     float temperature = 1.0;
-    int max_out_tokens = 30;
+    int max_out_tokens = 512; // 16, 32, 64, 128, 256, 512, 1024 (measure performance)
 
     while(1){ 
         
@@ -776,7 +794,9 @@ int main()
         int last_token_position = n_tokens - 1; 
         int ii = 0;
         for (; ii < max_out_tokens; ii++){  
-
+            if (ii % 32 == 0 && ii/32 != 0){
+                printf("finished 32 tokens...\n");
+            }
             // --- Reset top_k arrays ---
             int top_k_indices[40];
             float top_k_values[40];

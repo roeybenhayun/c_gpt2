@@ -1,7 +1,17 @@
 from transformers import GPT2LMHeadModel # 124M parameters
 import numpy as np
-model_path = "./transformers/models/gpt2"
-model = GPT2LMHeadModel.from_pretrained(model_path)
+target_model_size = 'medium'
+if (target_model_size == 'small'):
+    model_path = "./transformers/models/gpt2"
+    out_file = "gpt2_c_weights.bin"
+elif (target_model_size == 'medium'):
+    model_path = "./transformers/models/gpt2-medium"     
+    out_file = "gpt2_medium_c_weights.bin"
+else:
+    # Handle invalid choice: important for robustness
+    raise ValueError("Invalid model size specified. Choose 'small' or 'medium'.")
+
+model = GPT2LMHeadModel.from_pretrained(model_path) # default is GPT-2 small model (124M parameters)
 # raw tensors
 sd_hf = model.state_dict()
 save_tp_file = True
@@ -17,10 +27,10 @@ transpose_keys = [
 
 for k, v in sd_hf.items():
         print(f"Saving: {k} with shape {v.shape}")
-#exit
+
 if save_tp_file == True:
     # Open a binary file for writing
-    with open("gpt2_c_weights.bin", "wb") as f:
+    with open(out_file, "wb") as f:
         for k, v in sd_hf.items():
             print(f"Saving: {k} with shape {v.shape}")        
             # Convert tensor to numpy array of float32
