@@ -1,12 +1,15 @@
 from transformers import GPT2LMHeadModel # 124M parameters
 import numpy as np
-target_model_size = 'medium'
+target_model_size = 'large'
 if (target_model_size == 'small'):
     model_path = "./transformers/models/gpt2"
     out_file = "gpt2_c_weights.bin"
 elif (target_model_size == 'medium'):
     model_path = "./transformers/models/gpt2-medium"     
     out_file = "gpt2_medium_c_weights.bin"
+elif (target_model_size == 'large'):
+    model_path = "./transformers/models/gpt2-large"     
+    out_file = "gpt2_large_c_weights.bin"
 else:
     # Handle invalid choice: important for robustness
     raise ValueError("Invalid model size specified. Choose 'small' or 'medium'.")

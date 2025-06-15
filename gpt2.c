@@ -8,7 +8,7 @@
 // * CLI atg for top_p
 // * CLI arg for max tokens 
 // * Function to cleanup data structures
-// * calc time to token output
+// * calc time to token output - DONE
 // * Update layer names consistently
 // * Save ~147MB by using remove wte_T and use in dot_2d with transposed flag 
 
@@ -401,25 +401,33 @@ static void gelu_2d(float *a,int a_c, int a_r, float *out){
 //// Globals /// 
 struct timespec start,end;
 
-#define GPT2_MEDIUM_MODEL
+const int vocab_size = 50257;
+const int ctx_len = 1024; 
+
+#if !defined(GPT2_SMALL_MODEL) && !defined(GPT2_MEDIUM_MODEL) && !defined(GPT2_LARGE_MODEL)
+    #define GPT2_MEDIUM_MODEL
+#endif
 
 #ifdef GPT2_SMALL_MODEL
     const int d_model = 768;
-    const int ctx_len = 1024;
     const int num_layers = 12;
-    const int vocab_size = 50257;
     const int nof_heads = 12;
     #define MODEL_WEIGHTS_FILENAME "gpt2_c_weights.bin"
 #elif defined(GPT2_MEDIUM_MODEL)
     const int d_model = 1024; // GPT-2 Medium
-    const int ctx_len = 1024; // Same for GPT-2 Medium
     const int num_layers = 24; // GPT-2 Medium
-    const int vocab_size = 50257; // Same
     const int nof_heads = 16; // GPT-2 Medium
     #define MODEL_WEIGHTS_FILENAME "gpt2_medium_c_weights.bin"
+#elif defined(GPT2_LARGE_MODEL)
+    const int d_model = 1280; // GPT-2 Large
+    const int num_layers = 36; // GPT-2 Large
+    const int nof_heads = 20; // GPT-2 Large
+    #define MODEL_WEIGHTS_FILENAME "gpt2_large_c_weights.bin"
+
 #else
     #error "No GPT-2 model size defined!"
 #endif
+
 
 const float eps = 0.00001;
 const int head_dim = d_model/nof_heads;
@@ -752,7 +760,7 @@ int main()
 
 
     float temperature = 1.0;
-    int requested_out_tokens = 768; // 16, 32, 64, 128, 256, 512, 1024 (measure performance)
+    int requested_out_tokens = 64; // 16, 32, 64, 128, 256, 512, 1024 (measure performance)
     int token_chunk_size = 32;
     struct timespec loop_start, loop_end; // For per-chunk/per-token timing
 
@@ -897,6 +905,8 @@ int main()
             //        break;
             //    }
             //}
+            //===========================================MULTINOMIAL Sampling END===================================//
+            
             // --- Apply Top-K Sampling ---
             int top_k_val = 40; // Choose your desired K value (e.g., 40, 50, 100)
             // Ensure these arrays are large enough to hold 'top_k_val' elements
@@ -929,16 +939,11 @@ int main()
             tokens[current_seq_len++] = sampled_token;
             last_token_position = current_seq_len -1;
 
-            
-
-
 
             // --- Time Measurement and Logging per Chunk ---
             if (((ii + 1) % token_chunk_size == 0) || ((ii + 1) == requested_out_tokens)) {
                 clock_gettime(CLOCK_MONOTONIC, &loop_end);
                 double chunk_elapsed = (loop_end.tv_sec - loop_start.tv_sec) + (loop_end.tv_nsec - loop_start.tv_nsec) / 1e9;
-                // Calculate average O(N^2) time per token for this chunk
-
                 printf("  Generated %d tokens. Total context length: %d. Time for last %d tokens: %.4f seconds. Avg/token (this chunk): %.4f s\n", 
                        (ii + 1), current_seq_len, token_chunk_size, chunk_elapsed, chunk_elapsed / token_chunk_size);
 
@@ -946,9 +951,6 @@ int main()
 
                 clock_gettime(CLOCK_MONOTONIC, &loop_start); // Reset timer for next chunk
             }
-
-            //===========================================MULTINOMIAL Sampling END===================================//
-
 
         }
     

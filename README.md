@@ -58,6 +58,16 @@ wget https://huggingface.co/gpt2-medium/resolve/main/tokenizer_config.json
 wget https://huggingface.co/gpt2-medium/resolve/main/config.json
 
 To get GPT2 medium weights use the following urls. Save those fils into "transformers/models/gpt2-medium"
+wget https://huggingface.co/gpt2-large/resolve/main/pytorch_model.bin
+
+wget https://huggingface.co/gpt2-large/resolve/main/merges.txt
+
+wget https://huggingface.co/gpt2-large/resolve/main/vocab.json
+
+wget https://huggingface.co/gpt2-large/resolve/main/tokenizer_config.json
+
+wget https://huggingface.co/gpt2-large/resolve/main/config.json
+
 
 ## Compiler
 * gcc -v
@@ -72,7 +82,28 @@ To get GPT2 medium weights use the following urls. Save those fils into "transfo
 /opt/homebrew/bin/brew install jansson
 
 ### How to build?
-gcc -Wall -I/opt/homebrew/include -L/opt/homebrew/lib -ljansson -O3 -DUSE_ACCELERATE -DACCELERATE_NEW_LAPACK -framework Accelerate gpt2.c -o ./out/gpt2
+GPT2 medium is the default model (no need to add this compile time flag)
+To build GPT2 small use "GPT2_MEDIUM_MODE" compile time flag
+To build GPT2 large use "GPT2_LARGE_MODE" compile time flag
+
+To build with -DGPT2_SMALL_MODEL
+
+* make small      
+
+To build with -DGPT2_MEDIUM_MODEL (default if just 'make')
+
+* make medium        
+
+To build with -DGPT2_LARGE_MODEL
+
+* make large         
+
+To remove built binaries
+
+* make clean         
+
+
+
 
 #### Activate venv:
 * source transformers_env/bin/activate
