@@ -11,7 +11,9 @@ OUTDIR = ./out
 $(shell mkdir -p $(OUTDIR))
 
 # Targets
-all: medium
+.PHONY: all small medium large clean
+
+all: small medium large          # build everything with “make”
 
 small:
 	$(CC) $(CFLAGS) -DGPT2_SMALL_MODEL $(SRC) -o $(OUTDIR)/gpt2_small

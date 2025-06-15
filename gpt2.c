@@ -712,7 +712,7 @@ static void load_layers_weights(TransformerBlockParams * p_tfb, int layer_id,FIL
 #define MAX_TOKEN_LIST_CHARS (MAX_OUTPUT_TOKENS * CHARS_PER_TOKEN + 10) // 1024 tokens, up to 6 digits + comma/space, plus buffer
 #define MAX_JSON_REQUEST_CHARS (MAX_TOKEN_LIST_CHARS + 64) // For "\{\"mode\": \"decode\", \"tokens\": []}" wrapper
 
-int main()
+int main(int argc, char *argv[])
 {
     const int n_tokens = 1024;
     char input_buffer[2048];    
@@ -760,20 +760,33 @@ int main()
 
 
     float temperature = 1.0;
-    int requested_out_tokens = 64; // 16, 32, 64, 128, 256, 512, 1024 (measure performance)
+    int requested_out_tokens = 768; // 16, 32, 64, 128, 256, 512, 1024 (measure performance)
     int token_chunk_size = 32;
     struct timespec loop_start, loop_end; // For per-chunk/per-token timing
 
+    char *cli_input = NULL;
+    for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--prompt") == 0 && i + 1 < argc) {
+        cli_input = argv[i + 1];
+        break;
+    }
+    }
+
     while(1){ 
         
-        printf("Enter Input:");
-        // Input
-        fgets(input_buffer, sizeof(input_buffer), stdin);
-        input_buffer[strcspn(input_buffer, "\n")] = 0;
-        if (strcmp(input_buffer, "q") == 0) {
-            printf("QUIT\n");            
-            break;
+        if (cli_input){
+            strncpy(input_buffer, cli_input, sizeof(input_buffer));
+            input_buffer[sizeof(input_buffer) - 1] = '\0';
+        } else {
+            printf("Enter Input:");
+            fgets(input_buffer, sizeof(input_buffer), stdin);
+            input_buffer[strcspn(input_buffer, "\n")] = 0;
+            if (strcmp(input_buffer, "q") == 0) {
+                printf("QUIT\n");            
+                break;
+            }
         }
+        
 
         clock_gettime(CLOCK_MONOTONIC, &start); // start the overall inference
         printf("\nGPT2 Inference - Start\n");
@@ -974,6 +987,10 @@ int main()
         printf("\nGPT2 Inference - End (Total Generation Time: %.4f seconds)\n", total_inference_elapsed);
         printf("Average Time per Token (overall generation): %.4f seconds\n", total_inference_elapsed / requested_out_tokens);
     
+        if (cli_input){
+            // If input was provided via --prompt, only run once
+            break;
+        }
     }//main loop
 
     
