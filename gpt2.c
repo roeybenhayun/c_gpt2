@@ -401,7 +401,7 @@ static void gelu_2d(float *a,int a_c, int a_r, float *out){
 //// Globals /// 
 struct timespec start,end;
 
-#define GPT2_SMALL_MODEL
+#define GPT2_MEDIUM_MODEL
 
 #ifdef GPT2_SMALL_MODEL
     const int d_model = 768;
@@ -717,7 +717,7 @@ int main()
     
 
     long offset = (vocab_size * d_model + ctx_len * d_model) * sizeof(float);
-    char temp[32];
+    char temp_token_str[32];
     
 
     TransformerBlockParams layer = {
@@ -752,7 +752,9 @@ int main()
 
 
     float temperature = 1.0;
-    int max_out_tokens = 512; // 16, 32, 64, 128, 256, 512, 1024 (measure performance)
+    int requested_out_tokens = 768; // 16, 32, 64, 128, 256, 512, 1024 (measure performance)
+    int token_chunk_size = 32;
+    struct timespec loop_start, loop_end; // For per-chunk/per-token timing
 
     while(1){ 
         
@@ -765,7 +767,7 @@ int main()
             break;
         }
 
-        clock_gettime(CLOCK_MONOTONIC, &start);
+        clock_gettime(CLOCK_MONOTONIC, &start); // start the overall inference
         printf("\nGPT2 Inference - Start\n");
 
         // cleanup, move to the end (move to function)
@@ -784,19 +786,29 @@ int main()
         send_json_to_tokenizer(encode_request, encode_response);
         //printf("Encode Response: %s\n", encode_response);
         // Format
-        int n_tokens = parse_tokens(encode_response, tokens, ctx_len);
-        if (n_tokens < 0) {
+        int current_seq_len = parse_tokens(encode_response, tokens, ctx_len);
+        if (current_seq_len < 0) {
             printf("Failed to parse tokens!\n");
             continue;
         }
-        //printf("Parsed %d tokens\n",n_tokens);
         
-        int last_token_position = n_tokens - 1; 
-        int ii = 0;
-        for (; ii < max_out_tokens; ii++){  
-            if (ii % 32 == 0 && ii/32 != 0){
-                printf("finished 32 tokens...\n");
-            }
+        // --- Initialize last_token_position after parsing initial prompt ---
+        // This is the index of the last token in the *initial prompt*.
+        // It will be updated to point to the *newly added* token in each generation loop.
+        int last_token_position = current_seq_len - 1; 
+
+        printf("\n--- Token Generation Performance ---\n");
+        printf("Initial prompt length: %d\n", current_seq_len);
+
+        clock_gettime(CLOCK_MONOTONIC, &loop_start);
+
+        printf("--- Total Time for Single Forward Pass (O(N^2) Measurement) ---\n");
+        printf("Context Length | Total Pass Time (s)\n");
+        printf("------------------------------------\n");
+
+        for (int ii = 0; ii < requested_out_tokens; ii++){  
+            
+
             // --- Reset top_k arrays ---
             int top_k_indices[40];
             float top_k_values[40];
@@ -806,7 +818,7 @@ int main()
             }
         
             // Set
-            for (int i=0; i<n_tokens;i++){
+            for (int i=0; i<current_seq_len;i++){
                 for (int j=0; j<d_model;j++){
                     // can optimize here
                     embeddings[i][j] = wte[tokens[i]][j] + wpe[i][j];
@@ -821,12 +833,12 @@ int main()
                 load_layers_weights(&layer, i,fp);
                 //printf("nof_tokens=%d\n",n_tokens);
                                                 
-                transformer_block(&embeddings[0][0],n_tokens,&layer,json_root,i,ii);
+                transformer_block(&embeddings[0][0],current_seq_len,&layer,json_root,i,ii);
                 
                 // Zero out entire embeddings buffer (safe reset)
                 memset(&embeddings[0][0], 0, sizeof(float) * ctx_len * d_model);
                 // use the output from this block as the input to the next block
-                memcpy(&embeddings[0][0], &residual2_out[0][0], sizeof(float) * n_tokens * d_model);
+                memcpy(&embeddings[0][0], &residual2_out[0][0], sizeof(float) * current_seq_len * d_model);
                 //printf("*****Layer %d completed******\n",i);
 
             }
@@ -839,11 +851,11 @@ int main()
             print_2d_tensor("C residual2_out[1][:10]:",&residual2_out[1][0],ctx_len,d_model,1,10,0);
 
             // Layer Norm final
-            layernorm_2d(&residual2_out[0][0],n_tokens,d_model,&layer_normf_gamma[0],&layer_normf_beta[0],&Xf_out[0][0],eps);
+            layernorm_2d(&residual2_out[0][0],current_seq_len,d_model,&layer_normf_gamma[0],&layer_normf_beta[0],&Xf_out[0][0],eps);
             print_2d_tensor("C Xf_out[1][:10]:",&Xf_out[1][0],ctx_len,d_model,1,10,0);
 
             // get logits
-            dot_2d(&Xf_out[0][0],n_tokens,d_model,d_model,&wte_T[0][0],d_model,vocab_size,vocab_size,&logits[0][0],n_tokens,vocab_size,vocab_size,0,!APPLY_ATTENTION_SCALING);
+            dot_2d(&Xf_out[0][0],current_seq_len,d_model,d_model,&wte_T[0][0],d_model,vocab_size,vocab_size,&logits[0][0],current_seq_len,vocab_size,vocab_size,0,!APPLY_ATTENTION_SCALING);
             print_2d_tensor("C logits[1][i]",&logits[1][0],ctx_len,vocab_size,1,10,0);
 
 
@@ -914,19 +926,36 @@ int main()
             }
 
             //// Use sampled_token as your predicted next token
-            tokens[n_tokens++] = sampled_token;
-            last_token_position++;
+            tokens[current_seq_len++] = sampled_token;
+            last_token_position = current_seq_len -1;
 
+            
+
+
+
+            // --- Time Measurement and Logging per Chunk ---
+            if (((ii + 1) % token_chunk_size == 0) || ((ii + 1) == requested_out_tokens)) {
+                clock_gettime(CLOCK_MONOTONIC, &loop_end);
+                double chunk_elapsed = (loop_end.tv_sec - loop_start.tv_sec) + (loop_end.tv_nsec - loop_start.tv_nsec) / 1e9;
+                // Calculate average O(N^2) time per token for this chunk
+
+                printf("  Generated %d tokens. Total context length: %d. Time for last %d tokens: %.4f seconds. Avg/token (this chunk): %.4f s\n", 
+                       (ii + 1), current_seq_len, token_chunk_size, chunk_elapsed, chunk_elapsed / token_chunk_size);
+
+                printf("------------------------------------\n"); // Separator for chunks
+
+                clock_gettime(CLOCK_MONOTONIC, &loop_start); // Reset timer for next chunk
+            }
 
             //===========================================MULTINOMIAL Sampling END===================================//
 
 
         }
     
-        for (int i = 0; i < n_tokens; i++) {
+        for (int i = 0; i < current_seq_len; i++) {
             //printf("*******TOKEN = %d *****\n",tokens[i]);
-            snprintf(temp, sizeof(temp), "%d%s", tokens[i], (i < n_tokens - 1) ? "," : "");
-            strcat(token_list, temp);
+            snprintf(temp_token_str, sizeof(temp_token_str), "%d%s", tokens[i], (i < current_seq_len - 1) ? "," : "");
+            strcat(token_list, temp_token_str);
         }
 
         // Now format the decode_request
@@ -939,9 +968,9 @@ int main()
 
 
         clock_gettime(CLOCK_MONOTONIC, &end);
-        float elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
-        printf("\nGPT2 Inference - End\n");
-        printf("\nTime to first token (approx. no KV Cache, short )  %.2f seconds\n",elapsed/max_out_tokens);
+        float total_inference_elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+        printf("\nGPT2 Inference - End (Total Generation Time: %.4f seconds)\n", total_inference_elapsed);
+        printf("Average Time per Token (overall generation): %.4f seconds\n", total_inference_elapsed / requested_out_tokens);
     
     }//main loop
 
