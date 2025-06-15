@@ -1,12 +1,25 @@
-transformers/models/*
+# ───────── Transformer checkpoints ─────────
+transformers/models/gpt2/**/*
 !transformers/models/gpt2/.gitkeep
+
+transformers/models/gpt2-medium/**/*
+!transformers/models/gpt2-medium/.gitkeep
+
+# ───────── Build / logs ─────────
 out/*
+logs/*
+
+# ───────── Local env / editors ─────────
 transformers_env/
 .vscode/
+
+# ───────── Large binaries ─────────
 gpt2_c_weights.bin
 gpt2_medium_c_weights.bin
-gpt2.dSYM/*
+
+# ───────── macOS / Xcode ─────────
+*.dSYM
 .DS_Store/*
-logs/*
-blog/*
 .DS_Store
+blog/*
+
