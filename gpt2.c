@@ -162,6 +162,8 @@ static void add_tensor_to_layer(json_t *layer_obj, const char *tensor_name, floa
     json_object_set_new(layer_obj, tensor_name, tensor_array);
 }
 
+
+
 static void send_json_to_tokenizer(const char *json_str, char *response_buf) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
@@ -413,16 +415,22 @@ const int ctx_len = 1024;
     const int num_layers = 12;
     const int nof_heads = 12;
     #define MODEL_WEIGHTS_FILENAME "gpt2_c_weights.bin"
+    #define GPT2_PERFORMANCE_JSON_FILE_NAME "./logs/gpt2_small_performance.json"
+    #define MODEL "gpt2_small"
 #elif defined(GPT2_MEDIUM_MODEL)
     const int d_model = 1024; // GPT-2 Medium
     const int num_layers = 24; // GPT-2 Medium
     const int nof_heads = 16; // GPT-2 Medium
     #define MODEL_WEIGHTS_FILENAME "gpt2_medium_c_weights.bin"
+    #define GPT2_PERFORMANCE_JSON_FILE_NAME "./logs/gpt2_medium_performance.json"
+    #define MODEL "gpt2_medium"
 #elif defined(GPT2_LARGE_MODEL)
     const int d_model = 1280; // GPT-2 Large
     const int num_layers = 36; // GPT-2 Large
     const int nof_heads = 20; // GPT-2 Large
     #define MODEL_WEIGHTS_FILENAME "gpt2_large_c_weights.bin"
+    #define GPT2_PERFORMANCE_JSON_FILE_NAME "./logs/gpt2_large_performance.json"
+    #define MODEL "gpt2_large"
 
 #else
     #error "No GPT-2 model size defined!"
@@ -753,14 +761,27 @@ int main(int argc, char *argv[])
     FILE * fp = fopen(MODEL_WEIGHTS_FILENAME,"rb");
     
     json_t *json_root = json_object();
-    
+    json_t *perf_root   = json_object();  // top level
+    json_t *chunk_array = json_array();   // per chunk entries 
+    int current_seq_len_initial = 0;
+    float total_inference_elapsed = 0;
+    json_object_set_new(perf_root, "model_variant",  json_string(MODEL));
+    // Add run timestamp    
+    time_t now = time(NULL);
+    char time_str[32];
+    strftime(time_str, sizeof(time_str), "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
+    json_object_set_new(perf_root, "run_utc", json_string(time_str));
+    // Store array for per-chunk timings
+    json_object_set_new(perf_root, "chunks", chunk_array);
+
+
     fread_or_exit(wte,sizeof(float),vocab_size*d_model,fp);
     fread_or_exit(wpe,sizeof(float),ctx_len*d_model,fp);
     transpose_2d(&wte[0][0], vocab_size,d_model , &wte_T[0][0]);
 
 
     float temperature = 1.0;
-    int requested_out_tokens = 768; // 16, 32, 64, 128, 256, 512, 1024 (measure performance)
+    int requested_out_tokens = 64; // 16, 32, 64, 128, 256, 512, 1024 (measure performance)
     int token_chunk_size = 32;
     struct timespec loop_start, loop_end; // For per-chunk/per-token timing
 
@@ -776,7 +797,7 @@ int main(int argc, char *argv[])
         
         if (cli_input){
             strncpy(input_buffer, cli_input, sizeof(input_buffer));
-            input_buffer[sizeof(input_buffer) - 1] = '\0';
+            input_buffer[sizeof(input_buffer) - 1] = '\0';            
         } else {
             printf("Enter Input:");
             fgets(input_buffer, sizeof(input_buffer), stdin);
@@ -785,8 +806,10 @@ int main(int argc, char *argv[])
                 printf("QUIT\n");            
                 break;
             }
+            
         }
-        
+        // store prompt in json
+        json_object_set_new(perf_root, "prompt", json_string(input_buffer));
 
         clock_gettime(CLOCK_MONOTONIC, &start); // start the overall inference
         printf("\nGPT2 Inference - Start\n");
@@ -812,6 +835,7 @@ int main(int argc, char *argv[])
             printf("Failed to parse tokens!\n");
             continue;
         }
+        current_seq_len_initial = current_seq_len;
         
         // --- Initialize last_token_position after parsing initial prompt ---
         // This is the index of the last token in the *initial prompt*.
@@ -963,6 +987,14 @@ int main(int argc, char *argv[])
                 printf("------------------------------------\n"); // Separator for chunks
 
                 clock_gettime(CLOCK_MONOTONIC, &loop_start); // Reset timer for next chunk
+
+                /* -------- JSON logging -------- */
+                json_t *chunk_obj = json_object();
+                json_object_set_new(chunk_obj, "generated_so_far", json_integer(ii + 1));
+                json_object_set_new(chunk_obj, "total_context",   json_integer(current_seq_len));
+                json_object_set_new(chunk_obj, "chunk_seconds",   json_real(chunk_elapsed));
+                json_object_set_new(chunk_obj, "avg_sec_per_tok", json_real(chunk_elapsed / token_chunk_size));
+                json_array_append_new(chunk_array, chunk_obj);
             }
 
         }
@@ -983,7 +1015,7 @@ int main(int argc, char *argv[])
 
 
         clock_gettime(CLOCK_MONOTONIC, &end);
-        float total_inference_elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+        total_inference_elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
         printf("\nGPT2 Inference - End (Total Generation Time: %.4f seconds)\n", total_inference_elapsed);
         printf("Average Time per Token (overall generation): %.4f seconds\n", total_inference_elapsed / requested_out_tokens);
     
@@ -993,12 +1025,25 @@ int main(int argc, char *argv[])
         }
     }//main loop
 
-    
-    FILE *json_out = fopen("logs/tensor_output.json", "w");
-    json_dumpf(json_root, json_out, JSON_INDENT(4));
-    fclose(json_out);
-    json_decref(json_root);
+    /* initial prompt length (already known) */
+    json_object_set_new(perf_root, "initial_prompt_len", json_integer(current_seq_len_initial)); // capture this earlier
+    /* Max output length*/
+    json_object_set_new(perf_root, "requested_out_tokens", json_integer(requested_out_tokens)); 
+    /* full decode text */
+    json_object_set_new(perf_root, "generated_text",
+                    json_string(decode_response));  // decode_response already null-terminated
 
+    
+    json_object_set_new(perf_root, "total_seconds", json_real(total_inference_elapsed));
+
+    FILE *perf_out = fopen(GPT2_PERFORMANCE_JSON_FILE_NAME, "w");
+
+    if(perf_out){
+        json_dumpf(perf_root, perf_out, JSON_INDENT(4));
+        printf("» Performance log written to %s\n", GPT2_PERFORMANCE_JSON_FILE_NAME);
+    }
+    
+    json_decref(perf_root);
     fclose(fp);
 
     return 1;

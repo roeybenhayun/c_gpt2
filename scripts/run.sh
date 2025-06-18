@@ -12,6 +12,5 @@ MODELS=("gpt2_small" "gpt2_medium" "gpt2_large")
 
 for model in "${MODELS[@]}"; do
     echo "Running $model..."
-    ./out/$model --prompt "$INPUT_TEXT" > "$OUTPUT_DIR/${model}.txt"
-    echo "Output saved to $OUTPUT_DIR/${model}.txt"
+    ./out/$model --prompt "$INPUT_TEXT"
 done
