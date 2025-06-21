@@ -103,7 +103,7 @@ brew install jansson
 ```
 
 ## 🔨 Build Targets
-Medium is the default build target.
+For now only ARM64 OSX is supported
 
 Build GPT-2 Small:
 ```bash
@@ -155,15 +155,19 @@ Interactive mode:
 📁 Directory Structure (Relevant Parts)
 ```bash
 .
-├── out/                          # Compiled C binaries
-├── tokenizer.py                 # Tokenizer server
-├── extract_weights.py          # Script to extract weights from Hugging Face models
+├── out/                            # Compiled C binaries
+├── logs/                           # JSON logs
+├── scripts/                        # Various scripts (i.e automation, performance analysis)
+├── tokenizer.py                    # Tokenizer server
+├── extract_weights.py              # Script to extract weights from Hugging Face models
 ├── transformers/
 │   └── models/
 │       ├── gpt2/
 │       ├── gpt2-medium/
 │       └── gpt2-large/
-├── gpt2.c                       # Main C code for inference
+├── gpt2.c                          # Main C code for inference
 ├── Makefile
+├── requirements.txt                # Python modules
+├── train_gpt2.txt                  # Python GPT2 inference impl.
 └── README.md
 ```
