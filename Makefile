@@ -1,11 +1,45 @@
 # Compiler and flags
-CC = gcc
-CFLAGS = -Wall -O3 -I/opt/homebrew/include -L/opt/homebrew/lib -ljansson \
-         -DUSE_ACCELERATE -DACCELERATE_NEW_LAPACK -framework Accelerate
+CC =  
+ARCH = arm64
+CFLAGS = -Wall -O3
+LDFLAGS = -ljansson
+# Platform defs
+PLATFORM_DEFS =
+
+# --- Enforce OSx (Darwin) and arm64 architecture ---
+# Gets the OS name (e.g., "Darwin" for macOS)
+DETECTED_OS := $(strip $(shell uname -s))
+$(info DETECTED_OS='$(value DETECTED_OS)')
+
+# Gets the machine architecture (e.g., "arm64", "x86_64")
+DETECTED_ARCH := $(strip $(shell uname -m))
+$(info DETECTED_ARCH='$(value DETECTED_ARCH)')
+
+ifeq ($(DETECTED_OS),Darwin) # Check if the operating system is macOS
+    ifeq ($(DETECTED_ARCH),arm64) # If it's macOS, now check if the architecture is arm64
+        # --- Configuration for macOS arm64 ---
+        CC = clang # Use clang as the compiler for macOS
+        CFLAGS += -arch arm64 \
+			-I/opt/homebrew/include \
+			-L/opt/homebrew/lib
+        LDFLAGS += -framework Accelerate
+        PLATFORM_DEFS += -DUSE_ACCELERATE -DACCELERATE_NEW_LAPACK
+    else
+        $(error This Makefile is configured to support ONLY arm64 architecture on macOS. Detected OS: "$(DETECTED_OS)", Architecture: "$(DETECTED_ARCH)")
+
+    endif
+else
+    # Error if the operating system is not macOS (e.g., Linux, Windows)
+    $(error This Makefile is configured to support ONLY macOS (Darwin) operating system. Detected OS: "$(DETECTED_OS)")
+endif
+
+# Add platform-specific definitions to the main CFLAGS
+CFLAGS += $(PLATFORM_DEFS)
 
 # Source and output
 SRC = gpt2.c
 OUTDIR = ./out
+
 
 # Ensure the output directory exists
 $(shell mkdir -p $(OUTDIR))
@@ -16,13 +50,13 @@ $(shell mkdir -p $(OUTDIR))
 all: small medium large          # build everything with “make”
 
 small:
-	$(CC) $(CFLAGS) -DGPT2_SMALL_MODEL $(SRC) -o $(OUTDIR)/gpt2_small
+	$(CC) $(CFLAGS) -DGPT2_SMALL_MODEL $(SRC) -o $(OUTDIR)/gpt2_small $(LDFLAGS)
 
 medium:
-	$(CC) $(CFLAGS) -DGPT2_MEDIUM_MODEL $(SRC) -o $(OUTDIR)/gpt2_medium
+	$(CC) $(CFLAGS) -DGPT2_MEDIUM_MODEL $(SRC) -o $(OUTDIR)/gpt2_medium $(LDFLAGS)
 
 large:
-	$(CC) $(CFLAGS) -DGPT2_LARGE_MODEL $(SRC) -o $(OUTDIR)/gpt2_large
+	$(CC) $(CFLAGS) -DGPT2_LARGE_MODEL $(SRC) -o $(OUTDIR)/gpt2_large $(LDFLAGS)
 
 clean:
 	rm -f $(OUTDIR)/gpt2_*
