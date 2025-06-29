@@ -38,6 +38,8 @@ https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_c_weig
 🟡 GPT-2 Medium:
 https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_medium_c_weights.bin
 
+🔵 GPT-2 Large:
+https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_large_c_weights.bin
 
 ### 2. Create Weights from Hugging Face Files (Optional)
 You can generate the weights yourself using extract_weights.py.
@@ -105,12 +107,16 @@ brew install jansson
 ## 🔨 Build Targets
 For now only ARM64 OSX is supported
 
+### Standard Build (Without KV Cache)
+
+To build the standard, non-cached versions of the models, which are useful for baseline comparisons:
+
 Build GPT-2 Small:
 ```bash
 make small
 ```
 
-Build GPT-2 Medium (default):
+Build GPT-2 Medium:
 ```bash
 make medium
 ```
@@ -120,15 +126,41 @@ Build GPT-2 Large:
 make large
 ```
 
-Clean binaries:
+Build all targets
 ```bash
-make clean
+make 
+```
+
+### High-Performance Build (With KV Cache)
+To enable the high-performance KV Cache, pass the ENABLE_KV_CACHE flag via CPPFLAGS. This changes the token generation complexity from O(N²) to O(N), resulting in a significant speedup
+
+Build GPT-2 Small:
+```bash
+make small CPPFLAGS="-DENABLE_KV_CACHE"
+```
+
+Build GPT-2 Medium:
+```bash
+make medium CPPFLAGS="-DENABLE_KV_CACHE"
+```
+
+Build GPT-2 Large:
+```bash
+make large CPPFLAGS="-DENABLE_KV_CACHE"
 ```
 
 Build all targets
 ```bash
-make
+make CPPFLAGS="-DENABLE_KV_CACHE"
 ```
+
+### Cleaning
+To remove all compiled binaries from the project directory:
+
+```bash
+make clean
+```
+
 
 ## 🚀 Running Inference
 1. Activate Python environment:

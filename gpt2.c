@@ -437,6 +437,12 @@ const int ctx_len = 1024;
 #endif
 
 
+#ifdef ENABLE_KV_CACHE
+int kv_cache_enabled = 1;
+#else
+int kv_cache_enabled = 0;
+#endif
+
 const float eps = 0.00001;
 const int head_dim = d_model/nof_heads;
 const int d_ff = d_model * 4;
@@ -472,8 +478,13 @@ float temp_attn_bias[3*d_model] = {};
 
 float Q[ctx_len][d_model] = {};
 float K[ctx_len][d_model] = {};
+//float K_cache[ctx_len][d_model] = {};
+float K_cache[num_layers][ctx_len][d_model] = {};
+
 float K_T[d_model][ctx_len] = {};
 float V[ctx_len][d_model] = {};
+//float V_cache[ctx_len][d_model] = {};
+float V_cache[num_layers][ctx_len][d_model] = {};
 float attention_scores[ctx_len][ctx_len] = {};
 float attention_scores_temp[ctx_len][ctx_len] = {};
 float attention_weights[ctx_len][ctx_len] = {};
@@ -524,7 +535,8 @@ typedef struct{
 
 
 int glob_idx = 0;
-static void transformer_block(float *input,int n_tokens,
+int last_index = 0; // for kv cache
+static void transformer_block(float *input,int n_tokens,int n_new_tokens,
                         TransformerBlockParams * tbp,json_t *json_root,int layer_id,int token_idx
                         ){
     
@@ -539,21 +551,40 @@ static void transformer_block(float *input,int n_tokens,
     layernorm_2d(input,n_tokens,d_model,tbp->ln1_gamma,tbp->ln1_beta, &X_norm[0][0],eps);
     print_2d_tensor("LN1 X_norm[1][:10]:",&X_norm[1][0],ctx_len,d_model,1,10,0);
 
+    //int n_new_tokens = n_tokens-last_index;
 
     // QKV
-    dot_2d(&X_norm[0][0],n_tokens,d_model,d_model,tbp->W_q,d_model,d_model,d_model,&Q[0][0],n_tokens, d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-    add_bias_2d(&Q[0][0],n_tokens,d_model,tbp->b_q,NULL);
+    if(kv_cache_enabled){
+        
+        int cache_start_index = n_tokens - n_new_tokens;
+
+        dot_2d(&X_norm[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_q,d_model,d_model,d_model,&Q[cache_start_index][0],n_new_tokens, d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+        add_bias_2d(&Q[cache_start_index][0],n_new_tokens,d_model,tbp->b_q,NULL);
+
+        // final destination pointer in the cache
+        float* k_cache_ptr = &K_cache[layer_id][cache_start_index][0];
+        dot_2d(&X_norm[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_k,d_model,d_model,d_model,k_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+        add_bias_2d(k_cache_ptr,n_new_tokens,d_model,tbp->b_k,NULL);
+        //memcpy(&K_cache[layer_id][cache_start_index][0],&K[0][0], n_new_tokens * d_model * sizeof(float));
+
+        float* v_cache_ptr = &V_cache[layer_id][cache_start_index][0];
+        dot_2d(&X_norm[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_v,d_model,d_model,d_model,v_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+        add_bias_2d(v_cache_ptr,n_new_tokens,d_model,tbp->b_v,NULL);
+        //memcpy(&V_cache[layer_id][cache_start_index][0],&V[0][0], n_new_tokens * d_model * sizeof(float));
+
+        last_index = n_tokens;
+
+    } else {
+        dot_2d(&X_norm[0][0],n_tokens,d_model,d_model,tbp->W_q,d_model,d_model,d_model,&Q[0][0],n_tokens, d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+        add_bias_2d(&Q[0][0],n_tokens,d_model,tbp->b_q,NULL);
+
+        dot_2d(&X_norm[0][0],n_tokens,d_model,d_model,tbp->W_k,d_model,d_model,d_model,&K[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+        add_bias_2d(&K[0][0],n_tokens,d_model,tbp->b_k,NULL);
+
+        dot_2d(&X_norm[0][0],n_tokens,d_model,d_model,tbp->W_v,d_model,d_model,d_model,&V[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+        add_bias_2d(&V[0][0],n_tokens,d_model,tbp->b_v,NULL);
+    }
     
-    // save json
-    //add_tensor_to_layer(layer_obj, "Q", &Q[0][0], ctx_len, d_model, n_tokens, d_model);
-
-    dot_2d(&X_norm[0][0],n_tokens,d_model,d_model,tbp->W_k,d_model,d_model,d_model,&K[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-    add_bias_2d(&K[0][0],n_tokens,d_model,tbp->b_k,NULL);
-    // save json
-    //add_tensor_to_layer(layer_obj, "K", &K[0][0], ctx_len, d_model, n_tokens, d_model);
-
-    dot_2d(&X_norm[0][0],n_tokens,d_model,d_model,tbp->W_v,d_model,d_model,d_model,&V[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-    add_bias_2d(&V[0][0],n_tokens,d_model,tbp->b_v,NULL);
     //add_tensor_to_layer(layer_obj, "V", &V[0][0], ctx_len, d_model, n_tokens, d_model);
     print_2d_tensor("C Q[1][:10]:",&Q[1][0],ctx_len,d_model,1,10,0);
     print_2d_tensor("C K[1][:10]:",&K[1][0],ctx_len,d_model,1,10,0);
@@ -561,87 +592,160 @@ static void transformer_block(float *input,int n_tokens,
 
 
     // ** to add here the multi head attention code ***
+    /// To optimize this loop. No need to recompute entire attention matrix at every single
+    // step. Need to calc attention for the last token only during the generation 
+    // phase. which means calc 1xn_tokens instead of n_tokens x n_tokens matrix
     for (int h=0 ; h < nof_heads; h++){
-        float *q_h = &Q[0][0]+ h * head_dim;
-        float *k_h = &K[0][0]+ h * head_dim;
-        float *v_h = &V[0][0]+ h * head_dim;
+        float *q_h;
+        float *k_h;
+        float *v_h;
         float *context_h_out = &context_heads[h][0][0];
 
-        //Clear scores buffer to avoid stale values
-        memset(scores_h, 0, sizeof(float) * ctx_len * ctx_len);
+        if (kv_cache_enabled){
+            k_h = &K_cache[layer_id][0][0]+ h * head_dim;
+            v_h = &V_cache[layer_id][0][0]+ h * head_dim;
+            //context_h_out = &context_heads[h][0][0];
 
-        dot_2d(q_h,n_tokens,head_dim,d_model,k_h,n_tokens,head_dim,d_model,&scores_h[0][0],n_tokens,n_tokens,ctx_len,1,APPLY_ATTENTION_SCALING);
-        //print_2d_tensor(&scores_h[0][0], 4, 4, 4, 4);
-        apply_casual_masking(&scores_h[0][0],ctx_len/*n_tokens*/,n_tokens);
-        print_2d_tensor("C scores_h[1][i] (before Softmax):",&scores_h[1][0],ctx_len,ctx_len,1,10,0);
+            if(n_new_tokens == 1){
+                float* q_last_token_h = &Q[n_tokens - 1][0] + h * head_dim;
+                float* scores_last_row = &scores_h[n_tokens - 1][0]; 
+                float* weights_last_row = &weights_h[n_tokens - 1][0];
+                float* context_last_row = context_h_out + (n_tokens - 1) * head_dim;
 
-        
-        softmax_2d(&scores_h[0][0], n_tokens,n_tokens,ctx_len, &weights_h[0][0]);        
-        print_2d_tensor("C weights_h[1][:10]",&weights_h[1][0],ctx_len,ctx_len,1,10,0);
+                 // 1. Calculate scores: Q_last dot K_all -> [1 x head_dim] @ [head_dim x n_tokens] = [1 x n_tokens]
+                dot_2d(q_last_token_h, 1, head_dim, d_model, k_h, n_tokens, head_dim, d_model, scores_last_row, 1, n_tokens, ctx_len, 1, APPLY_ATTENTION_SCALING);
+                
+                // Causal mask is implicit up to n_tokens-1, no need to apply for the last row.
+                // 2. Softmax on the single row of scores
+                softmax_2d(scores_last_row, 1, n_tokens, ctx_len, weights_last_row);
 
-        dot_2d(&weights_h[0][0],n_tokens,n_tokens,ctx_len,v_h,n_tokens,head_dim,d_model,context_h_out,n_tokens,head_dim,head_dim,0,!APPLY_ATTENTION_SCALING);
+                // 3. Calculate context: Weights_last dot V_all -> [1 x n_tokens] @ [n_tokens x head_dim] = [1 x head_dim]
+                dot_2d(weights_last_row, 1, n_tokens, ctx_len, v_h, n_tokens, head_dim, d_model, context_last_row, 1, head_dim, head_dim, 0, !APPLY_ATTENTION_SCALING);
 
 
-    }
-
-    // use memcpy instead the loop
-    for (int i = 0; i < n_tokens; i++) {
-        for (int h = 0; h < nof_heads; h++) {
-            for (int k = 0; k < head_dim; k++) {
-                 // Copy element from context_heads[i][h][k] to final_attention_output[i][h * head_dim + k]
-                 float source_value = context_heads[h][i][k]; // Correct index for [nof_heads][ctx_len][head_dim] layout
-                 int dest_col = (h * head_dim) + k;
-                 final_attention_output[i][dest_col] = source_value;
+            } else {
+                // prefill
+                q_h = &Q[0][0]+ h * head_dim;
+                dot_2d(q_h,n_tokens,head_dim,d_model,k_h,n_tokens,head_dim,d_model,&scores_h[0][0],n_tokens,n_tokens,ctx_len,1,APPLY_ATTENTION_SCALING);
+                apply_casual_masking(&scores_h[0][0],ctx_len/*n_tokens*/,n_tokens);
+                //print_2d_tensor("C scores_h[1][i] (before Softmax):",&scores_h[1][0],ctx_len,ctx_len,1,10,0);            
+                softmax_2d(&scores_h[0][0], n_tokens,n_tokens,ctx_len, &weights_h[0][0]);        
+                //print_2d_tensor("C weights_h[1][:10]",&weights_h[1][0],ctx_len,ctx_len,1,10,0);
+                dot_2d(&weights_h[0][0],n_tokens,n_tokens,ctx_len,v_h,n_tokens,head_dim,d_model,context_h_out,n_tokens,head_dim,head_dim,0,!APPLY_ATTENTION_SCALING);
             }
-        }
+
+
+        }else{
+            q_h = &Q[0][0]+ h * head_dim;
+            k_h = &K[0][0]+ h * head_dim;
+            v_h = &V[0][0]+ h * head_dim;
+            //context_h_out = &context_heads[h][0][0];
+
+            //Clear scores buffer to avoid stale values
+            memset(scores_h, 0, sizeof(float) * ctx_len * ctx_len);
+
+            dot_2d(q_h,n_tokens,head_dim,d_model,k_h,n_tokens,head_dim,d_model,&scores_h[0][0],n_tokens,n_tokens,ctx_len,1,APPLY_ATTENTION_SCALING);
+            apply_casual_masking(&scores_h[0][0],ctx_len/*n_tokens*/,n_tokens);
+            //print_2d_tensor("C scores_h[1][i] (before Softmax):",&scores_h[1][0],ctx_len,ctx_len,1,10,0);            
+            softmax_2d(&scores_h[0][0], n_tokens,n_tokens,ctx_len, &weights_h[0][0]);        
+            //print_2d_tensor("C weights_h[1][:10]",&weights_h[1][0],ctx_len,ctx_len,1,10,0);
+            dot_2d(&weights_h[0][0],n_tokens,n_tokens,ctx_len,v_h,n_tokens,head_dim,d_model,context_h_out,n_tokens,head_dim,head_dim,0,!APPLY_ATTENTION_SCALING);
+        }                        
     }
-    print_2d_tensor("C final_attention_output[1][:10]:",&final_attention_output[1][0],ctx_len,d_model,1,10,0);
 
-    // Attention projection 
-    dot_2d(&final_attention_output[0][0],n_tokens,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context[0][0],ctx_len,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-    print_2d_tensor("C context[1][:10](before bias):",&context[1][0],ctx_len,d_model,1,10,0);
+    if(kv_cache_enabled && n_new_tokens == 1){
+        // generation phase
+            // index of the new token
+            int i = n_tokens - 1; 
+            // 1. head concat (for the last token only)
+            for (int h = 0; h < nof_heads; h++) {
+                // More efficient to copy the whole head's output for the token at once
+                memcpy(&final_attention_output[i][h * head_dim], &context_heads[h][i][0], head_dim * sizeof(float));
+            }
 
-    // Attn projection bias
-    add_bias_2d(&context[0][0],n_tokens,d_model,tbp->attn_proj_bias,NULL);
-    print_2d_tensor("C context[1][:10]:",&context[1][0],ctx_len,d_model,1,10,0);
+            // 2. Attention projection (on the last token only)
+            dot_2d(&final_attention_output[i][0],1,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+            
+            // Attn projection bias
+            add_bias_2d(&context[i][0],1,d_model,tbp->attn_proj_bias,NULL);
+            
+            // 3. Residual connection
+            add_2d(input + (i * d_model),1,d_model,&context[i][0],&residual_out[i][0]);            
 
-    // Residual connection
-    add_2d(input,n_tokens,d_model,&context[0][0],&residual_out[0][0]);
-    print_2d_tensor("C context[1][:10]:",&residual_out[1][0],ctx_len,d_model,1,10,0);
+            // 4. Layer Norm 2 (on the last token only)
+            layernorm_2d(&residual_out[i][0],1,d_model,tbp->ln2_gamma,tbp->ln2_beta, &X_norm2[i][0],eps);
+            
+            // 5. MLP (on the last token only)
+            dot_2d(&X_norm2[i][0],1,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out[i][0],1,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
+            // W1 bias
+            add_bias_2d(&X1_out[i][0],1,d_ff,tbp->b1,NULL);
+            // GELU activation
+            gelu_2d(&X1_out[i][0],d_ff,1,NULL);
+            // W2 
+            dot_2d(&X1_out[i][0],1,d_ff,d_ff,tbp->W2,d_model,d_ff,d_ff,&X2_out[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+            // W2 bias
+            add_bias_2d(&X2_out[i][0],1,d_model,tbp->b2,NULL);
+            
+            // 6. Final Residual Connection (for the last token only)
+            // First, preserve the state of previous tokens by copying them over
+            if (i > 0) {
+                memcpy(&residual2_out[0][0], input, i * d_model * sizeof(float));
+            }
+            // Then, calculate the new residual for the last token
+            add_2d(&residual_out[i][0], 1, d_model, &X2_out[i][0], &residual2_out[i][0]);
+
+        } else {
+            // prefill phase or non cached path
+            for (int i = 0; i < n_tokens; i++) {
+                for (int h = 0; h < nof_heads; h++) {
+                     memcpy(&final_attention_output[i][h * head_dim], &context_heads[h][i][0], head_dim * sizeof(float));
+                }            
+            }
+            // Attention projection 
+        dot_2d(&final_attention_output[0][0],n_tokens,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context[0][0],ctx_len,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+        print_2d_tensor("C context[1][:10](before bias):",&context[1][0],ctx_len,d_model,1,10,0);
+
+        // Attn projection bias
+        add_bias_2d(&context[0][0],n_tokens,d_model,tbp->attn_proj_bias,NULL);
+        print_2d_tensor("C context[1][:10]:",&context[1][0],ctx_len,d_model,1,10,0);
+
+        // Residual connection
+        add_2d(input,n_tokens,d_model,&context[0][0],&residual_out[0][0]);
+        print_2d_tensor("C context[1][:10]:",&residual_out[1][0],ctx_len,d_model,1,10,0);
 
 
-    // Layer Norm 2
-    layernorm_2d(&residual_out[0][0],n_tokens,d_model,tbp->ln2_gamma,tbp->ln2_beta, &X_norm2[0][0],eps);
-    print_2d_tensor("C X_norm2[1][:10]:",&X_norm2[1][0],ctx_len,d_model,1,10,0);
+        // Layer Norm 2
+        layernorm_2d(&residual_out[0][0],n_tokens,d_model,tbp->ln2_gamma,tbp->ln2_beta, &X_norm2[0][0],eps);
+        print_2d_tensor("C X_norm2[1][:10]:",&X_norm2[1][0],ctx_len,d_model,1,10,0);
 
 
-    // MLP layer, W1
-    dot_2d(&X_norm2[0][0],n_tokens,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out[0][0],n_tokens,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
-    print_2d_tensor("C X1_out[1][:10] before bias:",&X1_out[1][0],ctx_len,d_ff,1,10,0);
+        // MLP layer, W1
+        dot_2d(&X_norm2[0][0],n_tokens,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out[0][0],n_tokens,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
+        print_2d_tensor("C X1_out[1][:10] before bias:",&X1_out[1][0],ctx_len,d_ff,1,10,0);
 
-    // W1 bias
-    add_bias_2d(&X1_out[0][0],n_tokens,d_ff,tbp->b1,NULL);
-    print_2d_tensor("C X1_out[1][:10] before bias:",&X1_out[1][0],ctx_len,d_ff,1,10,0);
+        // W1 bias
+        add_bias_2d(&X1_out[0][0],n_tokens,d_ff,tbp->b1,NULL);
+        print_2d_tensor("C X1_out[1][:10] before bias:",&X1_out[1][0],ctx_len,d_ff,1,10,0);
 
-    // GELU activation
-    gelu_2d(&X1_out[0][0],n_tokens,d_ff,NULL);
-    print_2d_tensor("C X1_out after GELU[1][:10]",&X1_out[1][0],ctx_len,d_ff,1,10,0);
-    
-    // W2 
-    dot_2d(&X1_out[0][0],n_tokens,d_ff,d_ff,tbp->W2,d_model,d_ff,d_ff,&X2_out[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-    print_2d_tensor("C X2_out[1][:10] before bias:",&X2_out[1][0],ctx_len,d_model,1,10,0);
+        // GELU activation
+        gelu_2d(&X1_out[0][0],n_tokens,d_ff,NULL);
+        print_2d_tensor("C X1_out after GELU[1][:10]",&X1_out[1][0],ctx_len,d_ff,1,10,0);
+            
+        // W2 
+        dot_2d(&X1_out[0][0],n_tokens,d_ff,d_ff,tbp->W2,d_model,d_ff,d_ff,&X2_out[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+        print_2d_tensor("C X2_out[1][:10] before bias:",&X2_out[1][0],ctx_len,d_model,1,10,0);
 
-    // W2 bias
-    add_bias_2d(&X2_out[0][0],n_tokens,d_model,tbp->b2,NULL);
-    print_2d_tensor("C X2_out[1][:10]:",&X2_out[1][0],ctx_len,d_model,1,10,0);
+        // W2 bias
+        add_bias_2d(&X2_out[0][0],n_tokens,d_model,tbp->b2,NULL);
+        print_2d_tensor("C X2_out[1][:10]:",&X2_out[1][0],ctx_len,d_model,1,10,0);
 
-    // Residual connection
-    add_2d(&X2_out[0][0],n_tokens,d_model,&residual_out[0][0],&residual2_out[0][0]);
+        // Residual connection
+        add_2d(&X2_out[0][0],n_tokens,d_model,&residual_out[0][0],&residual2_out[0][0]);
 
-    //memcpy(residual2_out, residual_out, sizeof(residual_out));
+    }                    
     json_object_set_new(json_root, layer_key, layer_obj);
-
 }
+
 
 static int parse_tokens(const char *json, int *tokens, int max_tokens) {
     const char *start = strchr(json, '[');
@@ -781,16 +885,16 @@ int main(int argc, char *argv[])
 
 
     float temperature = 1.0;
-    int requested_out_tokens = 64; // 16, 32, 64, 128, 256, 512, 1024 (measure performance)
+    int requested_out_tokens = 40; // 16, 32, 64, 128, 256, 512, 1024 (measure performance)
     int token_chunk_size = 32;
     struct timespec loop_start, loop_end; // For per-chunk/per-token timing
 
     char *cli_input = NULL;
     for (int i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "--prompt") == 0 && i + 1 < argc) {
-        cli_input = argv[i + 1];
-        break;
-    }
+        if (strcmp(argv[i], "--prompt") == 0 && i + 1 < argc) {
+            cli_input = argv[i + 1];
+            break;
+        }
     }
 
     while(1){ 
@@ -822,6 +926,9 @@ int main(int argc, char *argv[])
         memset(decode_request, 0, sizeof(decode_request));
         memset(decode_response, 0, sizeof(decode_response));
         memset(token_list,0,sizeof(token_list));
+        // after parsing initial tokens
+        // should be reset for each new prompt
+        last_index = 0;
 
         // Format
         snprintf(encode_request, sizeof(encode_request),
@@ -870,15 +977,18 @@ int main(int argc, char *argv[])
                 }
             }
 
+            // calculate n_new_tokens once before iterating through layers
+            int n_new_tokens = current_seq_len - last_index;
+
             // reset file pointer position to load weights from the right position
             fseek(fp, offset, SEEK_SET);
-            // Infer
+            // Infer (loop through layers)
             for (int i=0 ; i < num_layers; i++){
                 //printf("File position before layer %d = %ld\n", i, ftell(fp));
                 load_layers_weights(&layer, i,fp);
                 //printf("nof_tokens=%d\n",n_tokens);
                                                 
-                transformer_block(&embeddings[0][0],current_seq_len,&layer,json_root,i,ii);
+                transformer_block(&embeddings[0][0],current_seq_len,n_new_tokens, &layer,json_root,i,ii);
                 
                 // Zero out entire embeddings buffer (safe reset)
                 memset(&embeddings[0][0], 0, sizeof(float) * ctx_len * d_model);
@@ -888,6 +998,9 @@ int main(int argc, char *argv[])
 
             }
 
+            if (kv_cache_enabled){
+                last_index = current_seq_len;
+            }
             // load weights and bias here
             fread_or_exit(layer_normf_gamma, sizeof(float), d_model, fp);
             fread_or_exit(layer_normf_beta, sizeof(float), d_model, fp);

@@ -3,6 +3,7 @@ CC =
 ARCH = arm64
 CFLAGS = -Wall -O3
 LDFLAGS = -ljansson
+CPPFLAGS =
 # Platform defs
 PLATFORM_DEFS =
 
@@ -50,13 +51,13 @@ $(shell mkdir -p $(OUTDIR))
 all: small medium large          # build everything with “make”
 
 small:
-	$(CC) $(CFLAGS) -DGPT2_SMALL_MODEL $(SRC) -o $(OUTDIR)/gpt2_small $(LDFLAGS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DGPT2_SMALL_MODEL $(SRC) -o $(OUTDIR)/gpt2_small $(LDFLAGS)
 
 medium:
-	$(CC) $(CFLAGS) -DGPT2_MEDIUM_MODEL $(SRC) -o $(OUTDIR)/gpt2_medium $(LDFLAGS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DGPT2_MEDIUM_MODEL $(SRC) -o $(OUTDIR)/gpt2_medium $(LDFLAGS)
 
 large:
-	$(CC) $(CFLAGS) -DGPT2_LARGE_MODEL $(SRC) -o $(OUTDIR)/gpt2_large $(LDFLAGS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DGPT2_LARGE_MODEL $(SRC) -o $(OUTDIR)/gpt2_large $(LDFLAGS)
 
 clean:
 	rm -f $(OUTDIR)/gpt2_*
