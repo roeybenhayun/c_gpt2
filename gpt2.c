@@ -870,6 +870,8 @@ int main(int argc, char *argv[])
     int current_seq_len_initial = 0;
     float total_inference_elapsed = 0;
     json_object_set_new(perf_root, "model_variant",  json_string(MODEL));
+    json_object_set_new(perf_root, "kv_cache_enabled", json_integer(kv_cache_enabled)); 
+    
     // Add run timestamp    
     time_t now = time(NULL);
     char time_str[32];
@@ -885,17 +887,31 @@ int main(int argc, char *argv[])
 
 
     float temperature = 1.0;
-    int requested_out_tokens = 40; // 16, 32, 64, 128, 256, 512, 1024 (measure performance)
-    int token_chunk_size = 32;
+    int requested_out_tokens = 768; // 16, 32, 64, 128, 256, 512, 1024 (measure performance I used 768)
+    int token_chunk_size = 32; // set to 1 for latency measurement
     struct timespec loop_start, loop_end; // For per-chunk/per-token timing
 
     char *cli_input = NULL;
+    char *json_out_file = NULL;
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--prompt") == 0 && i + 1 < argc) {
             cli_input = argv[i + 1];
-            break;
+            i++; 
+        }else if (strcmp(argv[i], "--req_out_tokens")==0 && i + 1 < argc){
+            requested_out_tokens = atoi(argv[i+1]); // fine to use atoi for now. 
+            i++;
+        }else if(strcmp(argv[i], "--token_chunk_size")==0 && i + 1 < argc){
+            token_chunk_size = atoi(argv[i+1]); // fine to use atoi for now
+            i++;
+        }else if(strcmp(argv[i], "--json_out_file")==0 && i + 1 < argc){
+            json_out_file = argv[i+1];
+            i++;
         }
     }
+    printf("req_out_tokens = %d\n",requested_out_tokens);
+    printf("token_chunk_size = %d\n",token_chunk_size);
+    printf("json_out_file = %s\n",json_out_file);
 
     while(1){ 
         
@@ -1142,6 +1158,10 @@ int main(int argc, char *argv[])
     json_object_set_new(perf_root, "initial_prompt_len", json_integer(current_seq_len_initial)); // capture this earlier
     /* Max output length*/
     json_object_set_new(perf_root, "requested_out_tokens", json_integer(requested_out_tokens)); 
+
+    /* Token chunk size */
+    json_object_set_new(perf_root, "token_chunk_size", json_integer(token_chunk_size)); 
+
     /* full decode text */
     json_object_set_new(perf_root, "generated_text",
                     json_string(decode_response));  // decode_response already null-terminated
@@ -1149,11 +1169,23 @@ int main(int argc, char *argv[])
     
     json_object_set_new(perf_root, "total_seconds", json_real(total_inference_elapsed));
 
-    FILE *perf_out = fopen(GPT2_PERFORMANCE_JSON_FILE_NAME, "w");
+    
+    const char * filename_to_open;
+
+    if (json_out_file) {
+        filename_to_open = json_out_file;
+    }else{
+        filename_to_open = GPT2_PERFORMANCE_JSON_FILE_NAME;        
+    }
+
+    FILE *perf_out = fopen(filename_to_open, "w");
 
     if(perf_out){
         json_dumpf(perf_root, perf_out, JSON_INDENT(4));
         printf("» Performance log written to %s\n", GPT2_PERFORMANCE_JSON_FILE_NAME);
+    } else{
+        perror("Error opening output file");
+        exit(EXIT_FAILURE);
     }
     
     json_decref(perf_root);
