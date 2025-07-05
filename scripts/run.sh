@@ -1,7 +1,7 @@
 #!/bin/bash
 INPUT_TEXT="Once upon a time, in a land far, far away, there was a small dragon."
 # for performance I used out_token=768
-OUT_TOKENS="256"
+OUT_TOKENS="768"
 CHUNK_SIZE="32"
 OUTPUT_DIR="logs"
 

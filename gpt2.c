@@ -456,22 +456,37 @@ float embeddings[ctx_len][d_model] = {}; // for now post positional embeddings. 
 float X_norm[ctx_len][d_model] = {};
 float X_norm2[ctx_len][d_model] = {};
 
-float W1[d_ff][d_model] = {};
-float b1[d_ff] = {};
+
 float X1[ctx_len][d_ff] = {};
 float X1_out[ctx_len][d_ff] = {};
-float W2[d_model][d_ff] = {};
-float b2[d_model] = {};
 float X2[ctx_len][d_model] = {};
 float X2_out[ctx_len][d_model] = {};
 float Xf_out[ctx_len][d_model] = {};
 
-float W_q[d_model][d_model] = {}; // learnable
-float W_k[d_model][d_model] = {}; // learnable
-float W_v[d_model][d_model] = {}; // learnable
-float b_q[d_model] = {}; // learnable
-float b_k[d_model] = {}; // learnable
-float b_v[d_model] = {}; // learnable
+/***  Attention (per-layer) ***/
+float (*W_q)[d_model][d_model];// 
+float (*W_k)[d_model][d_model]; 
+float (*W_v)[d_model][d_model];
+float (*b_q)[d_model];
+float (*b_k)[d_model];
+float (*b_v)[d_model];
+
+/* Output projections */
+float (*attn_proj_weight)[d_model][d_model];
+float (*attn_proj_bias)[d_model];
+
+/* Feed Forward */
+float (*W1)[d_ff][d_model];
+float (*b1)[d_ff];
+float (*W2)[d_model][d_ff];
+float (*b2)[d_model];
+
+/* Layer Norm */
+float (*layer_norm1_gamma)[d_model];
+float (*layer_norm1_beta)[d_model];
+float (*layer_norm2_gamma)[d_model];
+float (*layer_norm2_beta)[d_model];  
+
 
 float temp_attn_weight[3*d_model][d_model] = {}; // 2304 = 768 * 3
 float temp_attn_bias[3*d_model] = {};
@@ -490,18 +505,12 @@ float attention_scores_temp[ctx_len][ctx_len] = {};
 float attention_weights[ctx_len][ctx_len] = {};
 float context[ctx_len][d_model] = {};
 
-float layer_norm1_gamma[d_model] = {}; // default: no scaling
-float layer_norm1_beta[d_model] = {};  // default: no shifting
-float layer_norm2_gamma[d_model] = {}; // default: no scaling
-float layer_norm2_beta[d_model] = {};  // default: no shifting
+
 float layer_normf_gamma[d_model] = {}; // default: no scaling
 float layer_normf_beta[d_model] = {};  // default: no shifting
 
 float residual_out[ctx_len][d_model] = {};
 float residual2_out[ctx_len][d_model] = {};
-
-float attn_proj_weight[d_model][d_model] = {};
-float attn_proj_bias[d_model] = {};
 
 float logits[ctx_len][vocab_size] = {};
 
@@ -509,8 +518,6 @@ float context_heads[nof_heads][ctx_len][head_dim] = {};
 float scores_h[ctx_len][ctx_len] = {};
 float weights_h[ctx_len][ctx_len] = {};
 float final_attention_output[ctx_len][d_model] = {}; 
-
-
 
 
 typedef struct{
@@ -533,6 +540,52 @@ typedef struct{
 
 }TransformerBlockParams;
 
+static TransformerBlockParams layer[num_layers];
+
+static void allocate_weights(void){
+    W_q   =  malloc(num_layers * sizeof *W_q);
+    W_k   =  malloc(num_layers * sizeof *W_k);
+    W_v   =  malloc(num_layers * sizeof *W_v);
+    b_q   =  malloc(num_layers * sizeof *b_q);
+    b_k   =  malloc(num_layers * sizeof *b_k);
+    b_v   =  malloc(num_layers * sizeof *b_v);
+
+    attn_proj_weight = malloc(num_layers * sizeof *attn_proj_weight);
+    attn_proj_bias   = malloc(num_layers * sizeof *attn_proj_bias);
+
+    W1  = malloc(num_layers * sizeof *W1);
+    W2  = malloc(num_layers * sizeof *W2);
+    b1  = malloc(num_layers * sizeof *b1);
+    b2  = malloc(num_layers * sizeof *b2);
+
+    layer_norm1_gamma = malloc(num_layers * sizeof *layer_norm1_gamma);
+    layer_norm1_beta  = malloc(num_layers * sizeof *layer_norm1_beta);
+    layer_norm2_gamma = malloc(num_layers * sizeof *layer_norm2_gamma);
+    layer_norm2_beta  = malloc(num_layers * sizeof *layer_norm2_beta);
+
+    if (!W_q || !W_k) { perror("malloc"); exit(1); }
+}
+
+static void init_layer_table(void){
+    for (int l=0; l < num_layers ; l++){
+        layer[l].W_q = &W_q[l][0][0];
+        layer[l].W_k = &W_k[l][0][0];
+        layer[l].W_v = &W_v[l][0][0];
+        layer[l].b_k = &b_k[l][0];
+        layer[l].b_q = &b_q[l][0];
+        layer[l].b_v = &b_v[l][0];
+        layer[l].attn_proj_weight = &attn_proj_weight[l][0][0];
+        layer[l].attn_proj_bias = &attn_proj_bias[l][0];
+        layer[l].W1 = &W1[l][0][0];
+        layer[l].W2 = &W2[l][0][0];
+        layer[l].b1 = &b1[l][0];
+        layer[l].b2 = &b2[l][0];
+        layer[l].ln1_gamma = &layer_norm1_gamma[l][0];
+        layer[l].ln1_beta = &layer_norm1_beta[l][0];
+        layer[l].ln2_gamma = &layer_norm2_gamma[l][0];
+        layer[l].ln2_beta = &layer_norm2_beta[l][0];
+    }
+}
 
 int glob_idx = 0;
 int last_index = 0; // for kv cache
@@ -785,6 +838,46 @@ static void fread_or_exit(void *ptr, size_t size, size_t count, FILE *fp) {
     }
 }
 
+static void load_all_weights(FILE* fp){
+    // token + position embeddings 
+    fread_or_exit(wte,sizeof(float),vocab_size*d_model,fp);
+    fread_or_exit(wpe,sizeof(float),ctx_len*d_model,fp);
+
+    for (int l = 0; l < num_layers; l++){
+        fread_or_exit(layer[l].ln1_gamma, sizeof(float), d_model, fp);//ln_1.weight (768)
+        fread_or_exit(layer[l].ln1_beta,  sizeof(float), d_model, fp);//ln_1.bias (768)
+        fread_or_exit(temp_attn_weight, sizeof(float), d_model * 3 * d_model, fp);
+
+        for (int i = 0; i < d_model; i++) {
+            for (int j = 0; j < d_model; j++) {
+                layer[l].W_q[i * d_model + j] = temp_attn_weight[i][j];               // rows 0–767
+                layer[l].W_k[i * d_model + j] = temp_attn_weight[i + d_model][j];     // rows 768–1535
+                layer[l].W_v[i * d_model + j] = temp_attn_weight[i + 2 * d_model][j]; // rows 1536–2303
+            }
+        }
+        fread_or_exit(temp_attn_bias, sizeof(float), 3*d_model, fp);
+        for (int i = 0; i < d_model; i++) {
+            layer[l].b_q[i] = temp_attn_bias[i];
+            layer[l].b_k[i] = temp_attn_bias[d_model + i];
+            layer[l].b_v[i] = temp_attn_bias[2*d_model + i];
+        }
+        fread_or_exit(layer[l].attn_proj_weight,  sizeof(float), d_model*d_model, fp);//attn.c_proj.weight
+        fread_or_exit(layer[l].attn_proj_bias,  sizeof(float), d_model, fp);//attn.c_proj.bias
+        
+        fread_or_exit(layer[l].ln2_gamma, sizeof(float), d_model, fp);//ln_2.weight
+        fread_or_exit(layer[l].ln2_beta,  sizeof(float), d_model, fp);//ln_2.bias
+
+        fread_or_exit(layer[l].W1, sizeof(float), d_model*d_ff, fp);//mlp.c_fc.weight
+        fread_or_exit(layer[l].b1, sizeof(float), d_ff, fp);//mlp.c_fc.bias
+        fread_or_exit(layer[l].W2, sizeof(float), d_ff*d_model, fp);//mlp.c_proj.weight
+        fread_or_exit(layer[l].b2, sizeof(float), d_model, fp);//mlp.c_proj.bias
+    }
+    // final layer norm
+    fread_or_exit(layer_normf_gamma, sizeof(float), d_model, fp);
+    fread_or_exit(layer_normf_beta, sizeof(float), d_model, fp);
+
+}
+
 static void load_layers_weights(TransformerBlockParams * p_tfb, int layer_id,FILE * fp){
     
     fread_or_exit(p_tfb->ln1_gamma, sizeof(float), d_model, fp);//ln_1.weight (768)
@@ -840,30 +933,17 @@ int main(int argc, char *argv[])
     char temp_token_str[32];
     
 
-    TransformerBlockParams layer = {
-        &W_q[0][0],
-        &W_k[0][0],
-        &W_v[0][0],
-        &b_q[0],
-        &b_k[0],
-        &b_v[0],
-        &attn_proj_weight[0][0],
-        &attn_proj_bias[0],
-        &W1[0][0],
-        &W2[0][0],
-        &b1[0],
-        &b2[0],
-        layer_norm1_gamma,
-        layer_norm1_beta,
-        layer_norm2_gamma,
-        layer_norm2_beta
-    };
+
+
     // Load GTP2 weights
     printf("Loading GPT2 weights...\n");
-    
-    // Open the file containing the weights
+    allocate_weights();
+    init_layer_table();
+    // Open the file containing the weights, load all the weights and close it
     FILE * fp = fopen(MODEL_WEIGHTS_FILENAME,"rb");
-    
+    load_all_weights(fp);
+    fclose(fp);
+
     json_t *json_root = json_object();
     json_t *perf_root   = json_object();  // top level
     json_t *chunk_array = json_array();   // per chunk entries 
@@ -871,7 +951,7 @@ int main(int argc, char *argv[])
     float total_inference_elapsed = 0;
     json_object_set_new(perf_root, "model_variant",  json_string(MODEL));
     json_object_set_new(perf_root, "kv_cache_enabled", json_integer(kv_cache_enabled)); 
-    
+
     // Add run timestamp    
     time_t now = time(NULL);
     char time_str[32];
@@ -881,8 +961,8 @@ int main(int argc, char *argv[])
     json_object_set_new(perf_root, "chunks", chunk_array);
 
 
-    fread_or_exit(wte,sizeof(float),vocab_size*d_model,fp);
-    fread_or_exit(wpe,sizeof(float),ctx_len*d_model,fp);
+    //fread_or_exit(wte,sizeof(float),vocab_size*d_model,fp);
+    //fread_or_exit(wpe,sizeof(float),ctx_len*d_model,fp);
     transpose_2d(&wte[0][0], vocab_size,d_model , &wte_T[0][0]);
 
 
@@ -997,14 +1077,14 @@ int main(int argc, char *argv[])
             int n_new_tokens = current_seq_len - last_index;
 
             // reset file pointer position to load weights from the right position
-            fseek(fp, offset, SEEK_SET);
+            //fseek(fp, offset, SEEK_SET);
             // Infer (loop through layers)
             for (int i=0 ; i < num_layers; i++){
                 //printf("File position before layer %d = %ld\n", i, ftell(fp));
-                load_layers_weights(&layer, i,fp);
+                //load_layers_weights(&layer, i,fp);
                 //printf("nof_tokens=%d\n",n_tokens);
                                                 
-                transformer_block(&embeddings[0][0],current_seq_len,n_new_tokens, &layer,json_root,i,ii);
+                transformer_block(&embeddings[0][0],current_seq_len,n_new_tokens, &layer[i],json_root,i,ii);
                 
                 // Zero out entire embeddings buffer (safe reset)
                 memset(&embeddings[0][0], 0, sizeof(float) * ctx_len * d_model);
@@ -1018,8 +1098,8 @@ int main(int argc, char *argv[])
                 last_index = current_seq_len;
             }
             // load weights and bias here
-            fread_or_exit(layer_normf_gamma, sizeof(float), d_model, fp);
-            fread_or_exit(layer_normf_beta, sizeof(float), d_model, fp);
+            //fread_or_exit(layer_normf_gamma, sizeof(float), d_model, fp);
+            //fread_or_exit(layer_normf_beta, sizeof(float), d_model, fp);
             
 
             print_2d_tensor("C residual2_out[1][:10]:",&residual2_out[1][0],ctx_len,d_model,1,10,0);
@@ -1189,7 +1269,7 @@ int main(int argc, char *argv[])
     }
     
     json_decref(perf_root);
-    fclose(fp);
+    //fclose(fp);
 
     return 1;
 }
