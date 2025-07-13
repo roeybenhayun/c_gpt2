@@ -1,14 +1,10 @@
 /// TODO
-// * Add non optimzed 2d dot product (mainly for performance comparison)
 // * Change to loop to output token by token (instead of all at once)
 // * Move the token selection logic into a separate function
-// * Add KV cache
 // * CLI arg for temperature
 // * CLI arg for top_k
 // * CLI atg for top_p
-// * CLI arg for max tokens 
 // * Function to cleanup data structures
-// * calc time to token output - DONE
 // * Update layer names consistently
 // * Save ~147MB by using remove wte_T and use in dot_2d with transposed flag 
 
@@ -28,11 +24,23 @@
 #define SERVER_IP "127.0.0.1"
 #define BUF_SIZE 4096
 
-#ifdef USE_ACCELERATE
-#include <Accelerate/Accelerate.h>
-#define CBLAS_ROW_MAJOR CblasRowMajor
-#define CBLAS_NO_TRANS CblasNoTrans
+
+#ifdef USE_CUDA
+    #include <cuda_runtime.h>
+    #include <cublas_v2.h>
+#else 
+    #ifdef USE_ACCELERATE
+        #include <Accelerate/Accelerate.h>
+        #define CBLAS_ROW_MAJOR CblasRowMajor
+        #define CBLAS_NO_TRANS CblasNoTrans
+    #endif
 #endif
+
+//#ifdef USE_ACCELERATE
+//#include <Accelerate/Accelerate.h>
+//#define CBLAS_ROW_MAJOR CblasRowMajor
+//#define CBLAS_NO_TRANS CblasNoTrans
+//#endif
 
 #define APPLY_ATTENTION_SCALING (1)
 #define PI (3.14159265358979323846)
@@ -223,72 +231,98 @@ static void softmax_2d(float *a, int a_r, int a_c,int stride, float * c_out){
     }
 }
 
-static void dot_2d(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,int ldb, float* c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
-#ifdef USE_ACCELERATE
-float alpha = 1.0f;
-if (apply_attention_scaling) {
-    alpha = 1.0f / sqrtf((float)a_c);  // shared inner dimension
-    //printf("ALPHA = %f",alpha);
+#ifdef USE_CUDA
+// Helper function to initialize and get a static cuBLAS handle.
+static cublasHandle_t get_cublas_handle() {
+    static bool handle_initialized = false;
+    static cublasHandle_t handle;
+    if (!handle_initialized) {
+        cublasStatus_t stat = cublasCreate(&handle);
+        if (stat != CUBLAS_STATUS_SUCCESS) {
+            fprintf(stderr, "FATAL: cuBLAS handle initialization failed\n");
+            exit(1);
+        }
+        handle_initialized = true;
+    }
+    return handle;
 }
 
-float beta = 0.0f;
 
-enum CBLAS_TRANSPOSE trans_b = transpose_b ? CblasTrans : CblasNoTrans;
+static void dot_2d_gpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,int ldb, float* c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
+    // NOTE: Assumes 'a', 'b', and 'c_out' are pointers to GPU memory.
+    cublasHandle_t handle = get_cublas_handle();
 
-//int lda = a_c;                           // A: [a_r x a_c]
-//int ldb = b_c;                           // B: [b_c x b_r] if transposed
-//int ldc = transpose_b ? b_r : b_c;       // C: [a_r x output_cols]
+    float alpha = 1.0f;
+    if (apply_attention_scaling) {
+        alpha = 1.0f / sqrtf((float)a_c);
+    }
+    const float beta = 0.0f;
 
-int M = a_r;                             // rows of A / C
-int K = a_c;                             // inner dim (shared)
-int N = transpose_b ? b_r : b_c;         // output columns
+    const int M = a_r;
+    const int K = a_c;
+    const int N = transpose_b ? b_r : b_c;
 
-cblas_sgemm(CblasRowMajor,  // row major order
-            CblasNoTrans,   // a not transposed
-            trans_b,        // flag to transpose b if set to true
-            M,              // # rows of A or C
-            N,              // Number of columns of B_effective / columns of C
-            K,              // inner dimension, 
-            alpha,          // Scalar alpha
-            a,              // Pointer to matrix A
-            lda,            // A stride
-            b,              // Pointer to matrix B
-            ldb,            // B stride
-            beta,           // Scalar beta
-            c_out,          // Pointer to matrix C 
-            ldc             // C stride
-        );
+    // Row-Major to Column-Major trick for cuBLAS
+    const cublasOperation_t opB = transpose_b ? CUBLAS_OP_N : CUBLAS_OP_T;
+    const cublasOperation_t opA = CUBLAS_OP_T;
 
+    cublasStatus_t stat = cublasSgemm(handle, opB, opA, N, M, K, &alpha,
+                                      b, ldb, a, lda, &beta, c_out, ldc);
+
+    if (stat != CUBLAS_STATUS_SUCCESS) {
+        fprintf(stderr, "FATAL: cublasSgemm failed\n");
+        exit(1);
+    }
+}
+#endif
+
+#ifdef USE_ACCELERATE
+static void dot_2d_cpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,int ldb, float* c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
+
+    float alpha = 1.0f;
+    if (apply_attention_scaling) {
+        alpha = 1.0f / sqrtf((float)a_c);  // shared inner dimension
+        //printf("ALPHA = %f",alpha);
+    }
+
+    float beta = 0.0f;
+
+    enum CBLAS_TRANSPOSE trans_b = transpose_b ? CblasTrans : CblasNoTrans;
+
+    //int lda = a_c;                           // A: [a_r x a_c]
+    //int ldb = b_c;                           // B: [b_c x b_r] if transposed
+    //int ldc = transpose_b ? b_r : b_c;       // C: [a_r x output_cols]
+
+    int M = a_r;                             // rows of A / C
+    int K = a_c;                             // inner dim (shared)
+    int N = transpose_b ? b_r : b_c;         // output columns
+
+    cblas_sgemm(CblasRowMajor,  // row major order
+                CblasNoTrans,   // a not transposed
+                trans_b,        // flag to transpose b if set to true
+                M,              // # rows of A or C
+                N,              // Number of columns of B_effective / columns of C
+                K,              // inner dimension, 
+                alpha,          // Scalar alpha
+                a,              // Pointer to matrix A
+                lda,            // A stride
+                b,              // Pointer to matrix B
+                ldb,            // B stride
+                beta,           // Scalar beta
+                c_out,          // Pointer to matrix C 
+                ldc             // C stride
+            );
+}
+#endif
+
+static void dot_2d(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,int ldb, float* c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
+
+#ifdef USE_CUDA
+    dot_2d_gpu(a,a_r, a_c, lda, b, b_r, b_c, ldb,  c_out, c_r,  c_c,  ldc,  transpose_b, apply_attention_scaling);
+#elif USE_ACCELERATE
+    dot_2d_cpu(a,a_r, a_c, lda, b, b_r, b_c, ldb,  c_out, c_r,  c_c,  ldc,  transpose_b, apply_attention_scaling);
 #else    
-#error not implemented as it wont be functional in the naive way
-    float dot_product = 0.0;
-    float dot_product_sum = 0.0;
-    float scale_factor = 1.0;
-    // TODO - check edge cases here
-    if(apply_attention_scaling == 1){
-        scale_factor = (float)(1.0/sqrt(a_c));
-    }
-    //printf("in dot_2d\n");
-    for (int i=0; i<a_r; i++){        
-        for (int j=0; j<b_c; j++){            
-            for (int k=0; k<b_r; k++){
-                //printf("%d,%d,  %d,%d\n",i,k,k,j);
-                // dot_product += a[i][k] * b[k][j];
-                float av = *(a + i * a_c + k);
-                float bv = *(b + k * b_c + j);
-                dot_product += av * bv;     
-            }
-            dot_product_sum += dot_product;
-            *(c_out + i*b_c +j) = dot_product * scale_factor;
-            // Casual mask - take outside of the loop
-            //if (j > i){ // future token, mask it
-            //    *(c_out + i*b_c +j) = -INFINITY;
-            //}
-            //dot_product = 0.0;
-        }
-    }
-    //printf("dot_2d_product = %.17f\n",dot_product_sum);
-    //return dot_product_sum;
+    #error No backend (USE_CUDA or USE_ACCELERATE) is defined for dot_2d!
 #endif
 }
 
@@ -487,6 +521,31 @@ float (*layer_norm1_beta)[d_model];
 float (*layer_norm2_gamma)[d_model];
 float (*layer_norm2_beta)[d_model];  
 
+#ifdef USE_CUDA
+/***  Attention (per-layer) ***/
+float (*W_q_d)[d_model][d_model];// 
+float (*W_k_d)[d_model][d_model]; 
+float (*W_v_d)[d_model][d_model];
+float (*b_q_d)[d_model];
+float (*b_k_d)[d_model];
+float (*b_v_d)[d_model];
+
+/* Output projections */
+float (*attn_proj_weight_d)[d_model][d_model];
+float (*attn_proj_bias_d)[d_model];
+
+/* Feed Forward */
+float (*W1_d)[d_ff][d_model];
+float (*b1_d)[d_ff];
+float (*W2_d)[d_model][d_ff];
+float (*b2_d)[d_model];
+
+/* Layer Norm */
+float (*layer_norm1_gamma_d)[d_model];
+float (*layer_norm1_beta_d)[d_model];
+float (*layer_norm2_gamma_d)[d_model];
+float (*layer_norm2_beta_d)[d_model];  
+#endif
 
 float temp_attn_weight[3*d_model][d_model] = {}; // 2304 = 768 * 3
 float temp_attn_bias[3*d_model] = {};
@@ -542,28 +601,132 @@ typedef struct{
 
 static TransformerBlockParams layer[num_layers];
 
-static void allocate_weights(void){
+
+static void allocate_weights_gpu(void){
+#ifdef USE_CUDA
+    cudaError_t err;
+    err   =  cudaMalloc((void**)&W_q_d, num_layers * sizeof *W_q_d);
+
+    err   =  cudaMalloc((void**)&W_k_d,num_layers * sizeof *W_k_d);
+
+    err   =  cudaMalloc((void**)&W_v_d,num_layers * sizeof *W_v_d);
+
+    err   =  cudaMalloc((void**)&b_q_d,num_layers * sizeof *b_q_d);
+
+    err   =  cudaMalloc((void**)&b_k_d,num_layers * sizeof *b_k_d);
+
+    err   =  cudaMalloc((void**)&b_v_d,num_layers * sizeof *b_v_d);
+
+    err = cudaMalloc((void**)&attn_proj_weight_d,num_layers * sizeof *attn_proj_weight_d);
+
+    err   = cudaMalloc((void**)&attn_proj_bias_d,num_layers * sizeof *attn_proj_bias_d);
+
+    err  = cudaMalloc((void**)&W1_d,num_layers * sizeof *W1_d);
+
+    err  = cudaMalloc((void**)&W2_d,num_layers * sizeof *W2_d);
+
+    err  = cudaMalloc((void**)&b1_d,num_layers * sizeof *b1_d);
+
+    err  = cudaMalloc((void**)&b2_d,num_layers * sizeof *b2_d);
+
+    err = cudaMalloc((void**)&layer_norm1_gamma_d,num_layers * sizeof *layer_norm1_gamma_d);
+
+    err  = cudaMalloc((void**)&layer_norm1_beta_d,num_layers * sizeof *layer_norm1_beta_d);
+
+    err = cudaMalloc((void**)&layer_norm2_gamma_d,num_layers * sizeof *layer_norm2_gamma_d);
+
+    err  = cudaMalloc((void**)&layer_norm2_beta_d,num_layers * sizeof *layer_norm2_beta_d);
+#endif
+}
+
+static void allocate_weights_cpu(void){
+    size_t allocated_size = 0;
+    allocated_size += num_layers * sizeof *W_q;
     W_q   =  malloc(num_layers * sizeof *W_q);
+
+    allocated_size += num_layers * sizeof *W_k;
     W_k   =  malloc(num_layers * sizeof *W_k);
+
+    allocated_size += num_layers * sizeof *W_v;
     W_v   =  malloc(num_layers * sizeof *W_v);
+
+    allocated_size += num_layers * sizeof *b_q;
     b_q   =  malloc(num_layers * sizeof *b_q);
+
+    allocated_size += num_layers * sizeof *b_k;
     b_k   =  malloc(num_layers * sizeof *b_k);
+
+    allocated_size += num_layers * sizeof *b_v;
     b_v   =  malloc(num_layers * sizeof *b_v);
 
+    allocated_size += num_layers * sizeof *attn_proj_weight;
     attn_proj_weight = malloc(num_layers * sizeof *attn_proj_weight);
+
+    allocated_size += num_layers * sizeof *attn_proj_bias;
     attn_proj_bias   = malloc(num_layers * sizeof *attn_proj_bias);
 
+    allocated_size += num_layers * sizeof *W1;
     W1  = malloc(num_layers * sizeof *W1);
+
+    allocated_size += num_layers * sizeof *W2;
     W2  = malloc(num_layers * sizeof *W2);
+
+    allocated_size += num_layers * sizeof *b1;
     b1  = malloc(num_layers * sizeof *b1);
+
+    allocated_size += num_layers * sizeof *b2;
     b2  = malloc(num_layers * sizeof *b2);
 
+    allocated_size += num_layers * sizeof *layer_norm1_gamma;
     layer_norm1_gamma = malloc(num_layers * sizeof *layer_norm1_gamma);
+
+    allocated_size += num_layers * sizeof *layer_norm1_beta;
     layer_norm1_beta  = malloc(num_layers * sizeof *layer_norm1_beta);
+
+    allocated_size += num_layers * sizeof *layer_norm2_gamma;
     layer_norm2_gamma = malloc(num_layers * sizeof *layer_norm2_gamma);
+
+    allocated_size += num_layers * sizeof *layer_norm2_beta;
     layer_norm2_beta  = malloc(num_layers * sizeof *layer_norm2_beta);
 
+
+    // Small 340M, Medium 1.2G, Large 2.8G
+    printf("Total allocated memory = %zu\n",allocated_size);
+                                
     if (!W_q || !W_k) { perror("malloc"); exit(1); }
+    
+}
+
+static void update_layer_table(void){
+#ifdef USE_CUDA
+    for (int l=0; l < num_layers ; l++){
+        layer[l].W_q = &W_q_d[l][0][0];
+        layer[l].W_k = &W_k_d[l][0][0];
+        layer[l].W_v = &W_v_d[l][0][0];
+        layer[l].b_k = &b_k_d[l][0];
+        layer[l].b_q = &b_q_d[l][0];
+        layer[l].b_v = &b_v_d[l][0];
+        layer[l].attn_proj_weight = &attn_proj_weight_d[l][0][0];
+        layer[l].attn_proj_bias = &attn_proj_bias_d[l][0];
+        layer[l].W1 = &W1_d[l][0][0];
+        layer[l].W2 = &W2_d[l][0][0];
+        layer[l].b1 = &b1_d[l][0];
+        layer[l].b2 = &b2_d[l][0];
+        layer[l].ln1_gamma = &layer_norm1_gamma_d[l][0];
+        layer[l].ln1_beta = &layer_norm1_beta_d[l][0];
+        layer[l].ln2_gamma = &layer_norm2_gamma_d[l][0];
+        layer[l].ln2_beta = &layer_norm2_beta_d[l][0];
+    }
+#endif
+}
+static void allocate_weights(void){
+#ifdef USE_CUDA
+    allocate_weights_gpu();
+    // easiest for now,used to copy weights to GPU memory
+    allocate_weights_cpu();
+#else
+    allocate_weights_cpu();
+#endif
 }
 
 static void init_layer_table(void){
@@ -838,6 +1001,32 @@ static void fread_or_exit(void *ptr, size_t size, size_t count, FILE *fp) {
     }
 }
 
+static void copy_weights_to_gpu(void){
+#ifdef USE_CUDA
+    cudaMemcpy(W_q_d,  W_q, num_layers * sizeof (*W_q_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(W_k_d,  W_k, num_layers * sizeof (*W_k_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(W_v_d,  W_v, num_layers * sizeof (*W_v_d),cudaMemcpyHostToDevice);
+
+    cudaMemcpy(attn_proj_weight_d,  attn_proj_weight, num_layers * sizeof (*attn_proj_weight_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(attn_proj_bias_d,  attn_proj_bias, num_layers * sizeof (*attn_proj_bias_d),cudaMemcpyHostToDevice);
+
+    cudaMemcpy(b_q_d,  b_q, num_layers * sizeof (*b_q_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(b_k_d,  b_k, num_layers * sizeof (*b_k_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(b_v_d,  b_v, num_layers * sizeof (*b_v_d),cudaMemcpyHostToDevice);
+
+    cudaMemcpy(ln1_gamma_d,  ln1_gamma, num_layers * sizeof (*ln1_gamma_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(ln1_beta_d,  ln1_beta, num_layers * sizeof (*ln1_beta_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(ln2_gamma_d,  ln2_gamma, num_layers * sizeof (*ln2_gamma_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(ln2_beta_d,  ln2_beta, num_layers * sizeof (*ln2_beta_d),cudaMemcpyHostToDevice);
+
+
+    cudaMemcpy(W1_d,  W1, num_layers * sizeof (*W1_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(b1_d,  b1, num_layers * sizeof (*b1_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(W2_d,  W2, num_layers * sizeof (*W2_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(b2_d,  b2, num_layers * sizeof (*b2_d),cudaMemcpyHostToDevice);
+#endif
+
+}
 static void load_all_weights(FILE* fp){
     // token + position embeddings 
     fread_or_exit(wte,sizeof(float),vocab_size*d_model,fp);
@@ -875,6 +1064,9 @@ static void load_all_weights(FILE* fp){
     // final layer norm
     fread_or_exit(layer_normf_gamma, sizeof(float), d_model, fp);
     fread_or_exit(layer_normf_beta, sizeof(float), d_model, fp);
+
+    // no op if no GPU
+    copy_weights_to_gpu();
 
 }
 
@@ -929,7 +1121,7 @@ int main(int argc, char *argv[])
     char token_list[MAX_TOKEN_LIST_CHARS] = {0};
     
 
-    long offset = (vocab_size * d_model + ctx_len * d_model) * sizeof(float);
+    //long offset = (vocab_size * d_model + ctx_len * d_model) * sizeof(float);
     char temp_token_str[32];
     
 
@@ -939,6 +1131,9 @@ int main(int argc, char *argv[])
     printf("Loading GPT2 weights...\n");
     allocate_weights();
     init_layer_table();
+    // no op if CPU
+    update_layer_table();
+    // 
     // Open the file containing the weights, load all the weights and close it
     FILE * fp = fopen(MODEL_WEIGHTS_FILENAME,"rb");
     load_all_weights(fp);
