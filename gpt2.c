@@ -29,10 +29,12 @@
     #include <cuda_runtime.h>
     #include <cublas_v2.h>
 #else 
-    #ifdef USE_ACCELERATE
+    #if defined  (USE_ACCELERATE)
         #include <Accelerate/Accelerate.h>
         #define CBLAS_ROW_MAJOR CblasRowMajor
         #define CBLAS_NO_TRANS CblasNoTrans
+    #elif defined (USE_ACCELERATE_X86)
+        #include <cblas.h>
     #endif
 #endif
 
@@ -276,7 +278,7 @@ static void dot_2d_gpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b
 }
 #endif
 
-#ifdef USE_ACCELERATE
+#if defined (USE_ACCELERATE) || defined  (USE_ACCELERATE_X86)
 static void dot_2d_cpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,int ldb, float* c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
 
     float alpha = 1.0f;
@@ -319,7 +321,7 @@ static void dot_2d(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,i
 
 #ifdef USE_CUDA
     dot_2d_gpu(a,a_r, a_c, lda, b, b_r, b_c, ldb,  c_out, c_r,  c_c,  ldc,  transpose_b, apply_attention_scaling);
-#elif USE_ACCELERATE
+#elif defined (USE_ACCELERATE) || defined (USE_ACCELERATE_X86)
     dot_2d_cpu(a,a_r, a_c, lda, b, b_r, b_c, ldb,  c_out, c_r,  c_c,  ldc,  transpose_b, apply_attention_scaling);
 #else    
     #error No backend (USE_CUDA or USE_ACCELERATE) is defined for dot_2d!
@@ -437,32 +439,33 @@ static void gelu_2d(float *a,int a_c, int a_r, float *out){
 //// Globals /// 
 struct timespec start,end;
 
-const int vocab_size = 50257;
-const int ctx_len = 1024; 
+#define vocab_size (50257)
+#define ctx_len (1024) 
 
 #if !defined(GPT2_SMALL_MODEL) && !defined(GPT2_MEDIUM_MODEL) && !defined(GPT2_LARGE_MODEL)
     #define GPT2_MEDIUM_MODEL
 #endif
 
 #ifdef GPT2_SMALL_MODEL
-    const int d_model = 768;
-    const int num_layers = 12;
-    const int nof_heads = 12;
-    #define MODEL_WEIGHTS_FILENAME "gpt2_c_weights.bin"
+    #define  d_model (768)
+    #define num_layers (12)
+    #define nof_heads  (12)
+    #define MODEL_WEIGHTS_FILENAME "weights/gpt2_c_weights.bin"
     #define GPT2_PERFORMANCE_JSON_FILE_NAME "./logs/gpt2_small_performance.json"
     #define MODEL "gpt2_small"
 #elif defined(GPT2_MEDIUM_MODEL)
-    const int d_model = 1024; // GPT-2 Medium
-    const int num_layers = 24; // GPT-2 Medium
-    const int nof_heads = 16; // GPT-2 Medium
-    #define MODEL_WEIGHTS_FILENAME "gpt2_medium_c_weights.bin"
+    #define d_model (1024) // GPT-2 Medium
+    #define num_layers (24) // GPT-2 Medium
+    #define nof_heads (16) // GPT-2 Medium
+    /// TODO - to update the readme file or to remove the weights dir since it was missing
+    #define MODEL_WEIGHTS_FILENAME "weights/gpt2_medium_c_weights.bin"
     #define GPT2_PERFORMANCE_JSON_FILE_NAME "./logs/gpt2_medium_performance.json"
     #define MODEL "gpt2_medium"
 #elif defined(GPT2_LARGE_MODEL)
-    const int d_model = 1280; // GPT-2 Large
-    const int num_layers = 36; // GPT-2 Large
-    const int nof_heads = 20; // GPT-2 Large
-    #define MODEL_WEIGHTS_FILENAME "gpt2_large_c_weights.bin"
+    #define d_model (1280) // GPT-2 Large
+    #define num_layers (36) // GPT-2 Large
+    #define nof_heads (20) // GPT-2 Large
+    #define MODEL_WEIGHTS_FILENAME "weights/gpt2_large_c_weights.bin"
     #define GPT2_PERFORMANCE_JSON_FILE_NAME "./logs/gpt2_large_performance.json"
     #define MODEL "gpt2_large"
 
@@ -478,8 +481,8 @@ int kv_cache_enabled = 0;
 #endif
 
 const float eps = 0.00001;
-const int head_dim = d_model/nof_heads;
-const int d_ff = d_model * 4;
+#define head_dim  (d_model/nof_heads)
+#define d_ff  (d_model * 4)
 
 float wte[vocab_size][d_model] = {};
 float wte_T[d_model][vocab_size] = {};
@@ -601,9 +604,8 @@ typedef struct{
 
 static TransformerBlockParams layer[num_layers];
 
-
-static void allocate_weights_gpu(void){
 #ifdef USE_CUDA
+static void allocate_weights_gpu(void){
     cudaError_t err;
     err   =  cudaMalloc((void**)&W_q_d, num_layers * sizeof *W_q_d);
 
@@ -636,9 +638,9 @@ static void allocate_weights_gpu(void){
     err = cudaMalloc((void**)&layer_norm2_gamma_d,num_layers * sizeof *layer_norm2_gamma_d);
 
     err  = cudaMalloc((void**)&layer_norm2_beta_d,num_layers * sizeof *layer_norm2_beta_d);
-#endif
-}
 
+}
+#endif
 static void allocate_weights_cpu(void){
     size_t allocated_size = 0;
     allocated_size += num_layers * sizeof *W_q;
@@ -1117,7 +1119,7 @@ int main(int argc, char *argv[])
     char encode_response[MAX_JSON_REQUEST_CHARS];
     char decode_request[MAX_JSON_REQUEST_CHARS];
     char decode_response[MAX_JSON_REQUEST_CHARS];
-    int tokens[n_tokens] = {0};
+    int tokens[n_tokens] = {};
     char token_list[MAX_TOKEN_LIST_CHARS] = {0};
     
 
@@ -1131,13 +1133,17 @@ int main(int argc, char *argv[])
     printf("Loading GPT2 weights...\n");
     allocate_weights();
     init_layer_table();
+    printf("after layer table init\n");
     // no op if CPU
     update_layer_table();
     // 
     // Open the file containing the weights, load all the weights and close it
     FILE * fp = fopen(MODEL_WEIGHTS_FILENAME,"rb");
+    printf("filed is opened\n");
     load_all_weights(fp);
     fclose(fp);
+
+    printf("load weights...");
 
     json_t *json_root = json_object();
     json_t *perf_root   = json_object();  // top level

@@ -29,6 +29,19 @@ ifeq ($(DETECTED_OS),Darwin) # Check if the operating system is macOS
         $(error This Makefile is configured to support ONLY arm64 architecture on macOS. Detected OS: "$(DETECTED_OS)", Architecture: "$(DETECTED_ARCH)")
 
     endif
+else ifeq ($(DETECTED_OS),Linux)
+    ifeq ($(DETECTED_ARCH),x86_64)
+        CC = gcc
+        CFLAGS += \
+			-I/usr/include \
+			-L/usr/lib
+        LDFLAGS += -lopenblas -lm
+        PLATFORM_DEFS += -DUSE_ACCELERATE_X86
+    else
+        $(error This Makefile is configured to support ONLY x86_64 architecture on Linux. Detected OS: "$(DETECTED_OS)", Architecture: "$(DETECTED_ARCH)")
+
+    endif
+
 else
     # Error if the operating system is not macOS (e.g., Linux, Windows)
     $(error This Makefile is configured to support ONLY macOS (Darwin) operating system. Detected OS: "$(DETECTED_OS)")

@@ -4,7 +4,7 @@
 A C implementation of GPT-2 inference, using Hugging Face weights converted to a custom binary format. Tokenization is handled via a Python server. Using one external library for logging
 
 ---
-## 🧰 Setup Instructions
+## Setup Instructions
 
 ### 1. Python Environment
 
@@ -20,7 +20,7 @@ source transformers_env/bin/activate
 
 Install dependencies:
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.in
 ```
 
 ⚠️ Due to Python package version mismatches, loading and caching Hugging Face models might fail.
@@ -30,18 +30,18 @@ You can avoid this by manually downloading the model files (see below).
 
 
 ### 2. Download Prebuilt GPT2.C Weights (Recommended)
-Place these files directly in the root of the repository:
+Place these files under weights directory (create this dir in the project root):
 
-🟢 GPT-2 Small:
+GPT-2 Small:
 https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_c_weights.bin
 
-🟡 GPT-2 Medium:
+GPT-2 Medium:
 https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_medium_c_weights.bin
 
-🔵 GPT-2 Large:
+GPT-2 Large:
 https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_large_c_weights.bin
 
-### 2. Create Weights from Hugging Face Files (Optional)
+### 3. Create Weights from Hugging Face Files (Optional)
 You can generate the weights yourself using extract_weights.py.
 
 The required directories (transformers/models/gpt2, etc.) are already part of the repo.
@@ -86,12 +86,15 @@ python extract_weights.py --model-size small     # or medium / large
 ```
 
 
-## 🧱 Compiler & Build Instructions
+## Compiler & Build Instructions
 Tested with:
 ```text
 Apple clang version 16.0.0 (clang-1600.0.26.6)
 Target: arm64-apple-darwin23.6.0
 Thread model: posix
+
+Linux 6.14.0-36-generic #36~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC x86_64
+
 ```
 
 Install Homebrew (if needed):
@@ -100,14 +103,21 @@ Install Homebrew (if needed):
 ```
 
 Install Jansson (JSON library dependency):
+OSX
 ```bash
 brew install jansson
 ```
+Ubuntu run the install_dependencies.sh
+```bash
+sudo ./install_dependencies.sh
+```
 
-## 🔨 Build Targets
-For now only ARM64 OSX is supported
 
-### Standard Build (Without KV Cache)
+## Build Targets
+ARM64 OSX
+X86_64
+
+### Standard Build (Without KV Cache - only for comperisons)
 
 To build the standard, non-cached versions of the models, which are useful for baseline comparisons:
 
@@ -162,7 +172,7 @@ make clean
 ```
 
 
-## 🚀 Running Inference
+## Running Inference
 1. Activate Python environment:
 ```bash
 source transformers_env/bin/activate
@@ -184,6 +194,24 @@ Interactive mode:
 ./out/gpt2_small
 ```
 
+
+## Running Performence Tests
+To run for all the models
+```bash
+./scripts/run.sh
+```
+
+To run on a specific model (small,medium or large)
+```bash
+./scripts/run.sh small
+```
+
+Analyse the results
+```bash
+python scripts/performance_analysis.py
+```
+
+
 📁 Directory Structure (Relevant Parts)
 ```bash
 .
@@ -200,6 +228,8 @@ Interactive mode:
 ├── gpt2.c                          # Main C code for inference
 ├── Makefile
 ├── requirements.txt                # Python modules
-├── train_gpt2.txt                  # Python GPT2 inference impl.
+├── train_gpt2.py                   # Python GPT2 inference impl.
+├── weights                         # Models weights 
+├── install_dependencies            # (Ubuntu 24.04 only)
 └── README.md
 ```

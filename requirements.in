@@ -1,0 +1,11 @@
+# The Essentials (Used in your imports)
+numpy>=1.26
+transformers>=4.38   # For GPT2LMHeadModel
+tokenizers           # For Tokenizer
+matplotlib           # For pyplot
+
+# The Engine (Implicitly required by transformers)
+torch>=2.4.0         # Crucial for RTX 5080 support
+
+# Optional but Recommended (Prevents warnings)
+accelerate           # Hugging Face often complains if this is missing

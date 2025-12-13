@@ -4,7 +4,8 @@ import json
 from tokenizers import Tokenizer
 
 # Load the tokenizer from a local tokenizer.json file
-tokenizer = Tokenizer.from_file("../gpt2/tokenizer.json")
+# https://huggingface.co/openai-community/gpt2/resolve/main/tokenizer.json
+tokenizer = Tokenizer.from_file("tokenizer.json")
 
 HOST = '127.0.0.1'
 PORT = 65432

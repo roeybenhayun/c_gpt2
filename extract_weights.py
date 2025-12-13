@@ -1,15 +1,34 @@
+import argparse
 from transformers import GPT2LMHeadModel # 124M parameters
 import numpy as np
-target_model_size = 'large'
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Convert GPT-2 HuggingFace weights to a custom binary format.")
+    # Add the --model-size argument with enforced choices
+    parser.add_argument(
+        "--model-size", 
+        type=str, 
+        choices=["small", "medium", "large"], 
+        default="medium", # Set default here
+        help="Target model size to process. Must be one of: small, medium, large."
+    )
+    return parser.parse_args()
+args = parse_args()
+target_model_size = args.model_size
+
+
+print(f"Model size selected: {target_model_size}") 
+
+
 if (target_model_size == 'small'):
     model_path = "./transformers/models/gpt2"
-    out_file = "gpt2_c_weights.bin"
+    out_file = "weights/gpt2_c_weights.bin"
 elif (target_model_size == 'medium'):
     model_path = "./transformers/models/gpt2-medium"     
-    out_file = "gpt2_medium_c_weights.bin"
+    out_file = "weights/gpt2_medium_c_weights.bin"
 elif (target_model_size == 'large'):
     model_path = "./transformers/models/gpt2-large"     
-    out_file = "gpt2_large_c_weights.bin"
+    out_file = "weights/gpt2_large_c_weights.bin"
 else:
     # Handle invalid choice: important for robustness
     raise ValueError("Invalid model size specified. Choose 'small' or 'medium'.")

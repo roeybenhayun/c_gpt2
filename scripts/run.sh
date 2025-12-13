@@ -14,7 +14,28 @@ if [ ! -d "$OUTPUT_DIR" ]; then
 fi
 
 # Model list
-MODELS=("gpt2_small" "gpt2_medium" "gpt2_large")
+MODELS=()
+
+# Check if arguments were provided to the script
+if [ $# -eq 0 ]; then
+    # No arguments? Run ALL models by default
+    echo "No specific model size provided. Running ALL models."
+    MODELS=("gpt2_small" "gpt2_medium" "gpt2_large")
+else
+    # Arguments provided? Loop through them and build the list
+    for size in "$@"; do
+        case $size in
+            (small|medium|large)
+                MODELS+=("gpt2_$size")
+                ;;
+            (*)
+                echo "Error: Invalid model size '$size'."
+                echo "Usage: ./run.sh [small] [medium] [large]"
+                exit 1
+                ;;
+        esac
+    done
+fi
 
 for model in "${MODELS[@]}"; do    
     TIMESTAMP=$(date +'%Y%m%d_%H%M%S')

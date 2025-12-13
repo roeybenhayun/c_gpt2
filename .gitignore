@@ -8,6 +8,12 @@ transformers/models/gpt2-medium/**/*
 transformers/models/gpt2-large/**/*
 !transformers/models/gpt2-large/.gitkeep
 
+# ───────── Tokenizer ─────────
+tokenizer.json
+
+# ───────── Weights ─────────
+weights/*
+!weights/.gitkeep
 # ───────── Build / logs ─────────
 out/*
 logs/*
@@ -15,6 +21,7 @@ logs/*
 # ───────── Local env / editors ─────────
 transformers_env/
 .vscode/
+
 
 # ───────── Large binaries ─────────
 gpt2_c_weights.bin
