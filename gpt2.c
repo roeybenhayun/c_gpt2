@@ -276,9 +276,33 @@ static void dot_2d_gpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b
         exit(1);
     }
 }
+
+static void print_gpu_memory_usage() {
+    size_t free_byte;
+    size_t total_byte;
+
+    // Get the memory info
+    cudaError_t cuda_status = cudaMemGetInfo(&free_byte, &total_byte);
+
+    if (cuda_status != cudaSuccess) {
+        fprintf(stderr, "Error: cudaMemGetInfo failed: %s\n", 
+                cudaGetErrorString(cuda_status));
+        return;
+    }
+
+    double free_db = (double)free_byte;
+    double total_db = (double)total_byte;
+    double used_db = total_db - free_db;
+
+    printf("--- GPU Memory Status ---\n");
+    printf("Used:  %8.2f MB\n", used_db / (1024.0 * 1024.0));
+    printf("Free:  %8.2f MB\n", free_db / (1024.0 * 1024.0));
+    printf("Total: %8.2f MB\n", total_db / (1024.0 * 1024.0));
+    printf("-------------------------\n");
+}
 #endif
 
-#if defined (USE_ACCELERATE) || defined  (USE_ACCELERATE_X86)
+#if defined (USE_ACCELERATE) || ( defined  (USE_ACCELERATE_X86) &&  !defined (USE_CUDA))
 static void dot_2d_cpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,int ldb, float* c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
 
     float alpha = 1.0f;
@@ -323,6 +347,7 @@ static void dot_2d(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,i
     dot_2d_gpu(a,a_r, a_c, lda, b, b_r, b_c, ldb,  c_out, c_r,  c_c,  ldc,  transpose_b, apply_attention_scaling);
 #elif defined (USE_ACCELERATE) || defined (USE_ACCELERATE_X86)
     dot_2d_cpu(a,a_r, a_c, lda, b, b_r, b_c, ldb,  c_out, c_r,  c_c,  ldc,  transpose_b, apply_attention_scaling);
+
 #else    
     #error No backend (USE_CUDA or USE_ACCELERATE) is defined for dot_2d!
 #endif
@@ -525,6 +550,11 @@ float (*layer_norm2_gamma)[d_model];
 float (*layer_norm2_beta)[d_model];  
 
 #ifdef USE_CUDA
+/***  Global weights ***/
+float (*wte_d)[d_model];
+float (*wte_T_d)[d_model];
+float (*wpe_d)[d_model];
+
 /***  Attention (per-layer) ***/
 float (*W_q_d)[d_model][d_model];// 
 float (*W_k_d)[d_model][d_model]; 
@@ -548,6 +578,11 @@ float (*layer_norm1_gamma_d)[d_model];
 float (*layer_norm1_beta_d)[d_model];
 float (*layer_norm2_gamma_d)[d_model];
 float (*layer_norm2_beta_d)[d_model];  
+
+float *layer_normf_gamma_d;       // Final Layer Norm Gamma [d_model]
+float *layer_normf_beta_d;        // Final Layer Norm Beta [d_model]
+
+
 #endif
 
 float temp_attn_weight[3*d_model][d_model] = {}; // 2304 = 768 * 3
@@ -607,37 +642,29 @@ static TransformerBlockParams layer[num_layers];
 #ifdef USE_CUDA
 static void allocate_weights_gpu(void){
     cudaError_t err;
-    err   =  cudaMalloc((void**)&W_q_d, num_layers * sizeof *W_q_d);
+    err = cudaMalloc((void**)&wte_d, vocab_size * sizeof *wte_d);
+    err = cudaMalloc((void**)&wpe_d, ctx_len * sizeof *wpe_d);
+    err = cudaMalloc((void**)&wte_T_d, d_model * sizeof *wte_T_d);
 
-    err   =  cudaMalloc((void**)&W_k_d,num_layers * sizeof *W_k_d);
-
-    err   =  cudaMalloc((void**)&W_v_d,num_layers * sizeof *W_v_d);
-
-    err   =  cudaMalloc((void**)&b_q_d,num_layers * sizeof *b_q_d);
-
-    err   =  cudaMalloc((void**)&b_k_d,num_layers * sizeof *b_k_d);
-
-    err   =  cudaMalloc((void**)&b_v_d,num_layers * sizeof *b_v_d);
-
+    err = cudaMalloc((void**)&W_q_d, num_layers * sizeof *W_q_d);
+    err = cudaMalloc((void**)&W_k_d,num_layers * sizeof *W_k_d);
+    err = cudaMalloc((void**)&W_v_d,num_layers * sizeof *W_v_d);
+    err = cudaMalloc((void**)&b_q_d,num_layers * sizeof *b_q_d);
+    err = cudaMalloc((void**)&b_k_d,num_layers * sizeof *b_k_d);
+    err = cudaMalloc((void**)&b_v_d,num_layers * sizeof *b_v_d);
     err = cudaMalloc((void**)&attn_proj_weight_d,num_layers * sizeof *attn_proj_weight_d);
-
-    err   = cudaMalloc((void**)&attn_proj_bias_d,num_layers * sizeof *attn_proj_bias_d);
-
-    err  = cudaMalloc((void**)&W1_d,num_layers * sizeof *W1_d);
-
-    err  = cudaMalloc((void**)&W2_d,num_layers * sizeof *W2_d);
-
-    err  = cudaMalloc((void**)&b1_d,num_layers * sizeof *b1_d);
-
-    err  = cudaMalloc((void**)&b2_d,num_layers * sizeof *b2_d);
-
+    err = cudaMalloc((void**)&attn_proj_bias_d,num_layers * sizeof *attn_proj_bias_d);
+    err = cudaMalloc((void**)&W1_d,num_layers * sizeof *W1_d);
+    err = cudaMalloc((void**)&W2_d,num_layers * sizeof *W2_d);
+    err = cudaMalloc((void**)&b1_d,num_layers * sizeof *b1_d);
+    err = cudaMalloc((void**)&b2_d,num_layers * sizeof *b2_d);
     err = cudaMalloc((void**)&layer_norm1_gamma_d,num_layers * sizeof *layer_norm1_gamma_d);
-
-    err  = cudaMalloc((void**)&layer_norm1_beta_d,num_layers * sizeof *layer_norm1_beta_d);
-
+    err = cudaMalloc((void**)&layer_norm1_beta_d,num_layers * sizeof *layer_norm1_beta_d);
     err = cudaMalloc((void**)&layer_norm2_gamma_d,num_layers * sizeof *layer_norm2_gamma_d);
+    err = cudaMalloc((void**)&layer_norm2_beta_d,num_layers * sizeof *layer_norm2_beta_d);
 
-    err  = cudaMalloc((void**)&layer_norm2_beta_d,num_layers * sizeof *layer_norm2_beta_d);
+    err = cudaMalloc((void**)&layer_normf_gamma_d, d_model * sizeof(float));
+    err = cudaMalloc((void**)&layer_normf_beta_d, d_model * sizeof(float));
 
 }
 #endif
@@ -725,7 +752,7 @@ static void allocate_weights(void){
 #ifdef USE_CUDA
     allocate_weights_gpu();
     // easiest for now,used to copy weights to GPU memory
-    allocate_weights_cpu();
+    //allocate_weights_cpu();
 #else
     allocate_weights_cpu();
 #endif
@@ -1005,6 +1032,11 @@ static void fread_or_exit(void *ptr, size_t size, size_t count, FILE *fp) {
 
 static void copy_weights_to_gpu(void){
 #ifdef USE_CUDA
+
+    cudaMemcpy(wte_d,  wte, vocab_size * sizeof(*wte_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(wpe_d,  wpe, ctx_len * sizeof(*wpe_d),cudaMemcpyHostToDevice);
+    //cudaMemcpy(wte_T_d,wte_T, sizeof (*wte_T),cudaMemcpyHostToDevice);
+
     cudaMemcpy(W_q_d,  W_q, num_layers * sizeof (*W_q_d),cudaMemcpyHostToDevice);
     cudaMemcpy(W_k_d,  W_k, num_layers * sizeof (*W_k_d),cudaMemcpyHostToDevice);
     cudaMemcpy(W_v_d,  W_v, num_layers * sizeof (*W_v_d),cudaMemcpyHostToDevice);
@@ -1016,16 +1048,19 @@ static void copy_weights_to_gpu(void){
     cudaMemcpy(b_k_d,  b_k, num_layers * sizeof (*b_k_d),cudaMemcpyHostToDevice);
     cudaMemcpy(b_v_d,  b_v, num_layers * sizeof (*b_v_d),cudaMemcpyHostToDevice);
 
-    cudaMemcpy(ln1_gamma_d,  ln1_gamma, num_layers * sizeof (*ln1_gamma_d),cudaMemcpyHostToDevice);
-    cudaMemcpy(ln1_beta_d,  ln1_beta, num_layers * sizeof (*ln1_beta_d),cudaMemcpyHostToDevice);
-    cudaMemcpy(ln2_gamma_d,  ln2_gamma, num_layers * sizeof (*ln2_gamma_d),cudaMemcpyHostToDevice);
-    cudaMemcpy(ln2_beta_d,  ln2_beta, num_layers * sizeof (*ln2_beta_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(layer_norm1_gamma_d,  layer_norm1_gamma, num_layers * sizeof (*layer_norm1_gamma_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(layer_norm1_beta_d,  layer_norm1_beta, num_layers * sizeof (*layer_norm1_beta_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(layer_norm2_gamma_d,  layer_norm2_gamma, num_layers * sizeof (*layer_norm2_gamma_d),cudaMemcpyHostToDevice);
+    cudaMemcpy(layer_norm2_beta_d,  layer_norm2_beta, num_layers * sizeof (*layer_norm2_beta_d),cudaMemcpyHostToDevice);
 
 
     cudaMemcpy(W1_d,  W1, num_layers * sizeof (*W1_d),cudaMemcpyHostToDevice);
     cudaMemcpy(b1_d,  b1, num_layers * sizeof (*b1_d),cudaMemcpyHostToDevice);
     cudaMemcpy(W2_d,  W2, num_layers * sizeof (*W2_d),cudaMemcpyHostToDevice);
     cudaMemcpy(b2_d,  b2, num_layers * sizeof (*b2_d),cudaMemcpyHostToDevice);
+
+    cudaMemcpy(layer_normf_gamma_d, layer_normf_gamma, d_model * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(layer_normf_beta_d, layer_normf_beta, d_model * sizeof(float), cudaMemcpyHostToDevice);
 #endif
 
 }
@@ -1126,16 +1161,20 @@ int main(int argc, char *argv[])
     //long offset = (vocab_size * d_model + ctx_len * d_model) * sizeof(float);
     char temp_token_str[32];
     
-
-
-
     // Load GTP2 weights
     printf("Loading GPT2 weights...\n");
+#ifdef USE_CUDA
+    print_gpu_memory_usage();
+#endif
     allocate_weights();
     init_layer_table();
     printf("after layer table init\n");
     // no op if CPU
     update_layer_table();
+#ifdef USE_CUDA
+    print_gpu_memory_usage();
+    return 1;
+#endif
     // 
     // Open the file containing the weights, load all the weights and close it
     FILE * fp = fopen(MODEL_WEIGHTS_FILENAME,"rb");
@@ -1161,11 +1200,11 @@ int main(int argc, char *argv[])
     // Store array for per-chunk timings
     json_object_set_new(perf_root, "chunks", chunk_array);
 
-
-    //fread_or_exit(wte,sizeof(float),vocab_size*d_model,fp);
-    //fread_or_exit(wpe,sizeof(float),ctx_len*d_model,fp);
     transpose_2d(&wte[0][0], vocab_size,d_model , &wte_T[0][0]);
-
+#ifdef USE_CUDA
+    // Copy now to GPU
+    cudaMemcpy(wte_T_d, wte_T, d_model * sizeof(*wte_T_d), cudaMemcpyHostToDevice);
+#endif
 
     float temperature = 1.0;
     int requested_out_tokens = 768; // 16, 32, 64, 128, 256, 512, 1024 (measure performance I used 768)
@@ -1201,10 +1240,13 @@ int main(int argc, char *argv[])
             input_buffer[sizeof(input_buffer) - 1] = '\0';            
         } else {
             printf("Enter Input:");
-            fgets(input_buffer, sizeof(input_buffer), stdin);
+            if (fgets(input_buffer, sizeof(input_buffer), stdin) == NULL){
+                printf("fgets failed, quit\n");
+                break;
+            };
             input_buffer[strcspn(input_buffer, "\n")] = 0;
             if (strcmp(input_buffer, "q") == 0) {
-                printf("QUIT\n");            
+                printf("QUIT\n");
                 break;
             }
             
@@ -1257,16 +1299,6 @@ int main(int argc, char *argv[])
 
         for (int ii = 0; ii < requested_out_tokens; ii++){  
             
-
-            // --- Reset top_k arrays ---
-            int top_k_indices[40];
-            float top_k_values[40];
-            for (int j = 0; j < 40; j++) {
-                top_k_indices[j] = -1;
-                top_k_values[j] = -INFINITY;
-            }
-        
-            // Set
             for (int i=0; i<current_seq_len;i++){
                 for (int j=0; j<d_model;j++){
                     // can optimize here
@@ -1294,6 +1326,7 @@ int main(int argc, char *argv[])
                 //printf("*****Layer %d completed******\n",i);
 
             }
+            //printf("transformer loop done\n");
 
             if (kv_cache_enabled){
                 last_index = current_seq_len;
@@ -1338,6 +1371,7 @@ int main(int argc, char *argv[])
             for (int i = 0; i < vocab_size; i++) {
                 probs[i] /= sum;
             }
+            //printf("softmax done");
             //===========================================SOFTMAX END===================================//
 
             //===========================================MULTINOMIAL Sampling START===================================//
@@ -1385,7 +1419,7 @@ int main(int argc, char *argv[])
             //// Use sampled_token as your predicted next token
             tokens[current_seq_len++] = sampled_token;
             last_token_position = current_seq_len -1;
-
+            //printf("%d ",sampled_token);
 
             // --- Time Measurement and Logging per Chunk ---
             if (((ii + 1) % token_chunk_size == 0) || ((ii + 1) == requested_out_tokens)) {

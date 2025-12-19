@@ -119,7 +119,7 @@ int main(){
 
     printf("CUDNN addition has completed\n");
 
-    add_bias_2d(&a_h[0][0],a_ROW,a_COL,&b_h[0][0],&result_h2[0][0]);
+    add_bias_2d_cpu(&a_h[0][0],a_ROW,a_COL,&b_h[0][0],&result_h2[0][0]);
 
 
     // compare results

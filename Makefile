@@ -5,7 +5,7 @@ CFLAGS = -Wall -O3
 LDFLAGS = -ljansson
 CPPFLAGS =
 # Platform defs
-PLATFORM_DEFS =
+PLATFORM_DEFS = -DENABLE_KV_CACHE
 
 # --- Enforce OSx (Darwin) and arm64 architecture ---
 # Gets the OS name (e.g., "Darwin" for macOS)
@@ -32,11 +32,19 @@ ifeq ($(DETECTED_OS),Darwin) # Check if the operating system is macOS
 else ifeq ($(DETECTED_OS),Linux)
     ifeq ($(DETECTED_ARCH),x86_64)
         CC = gcc
-        CFLAGS += \
-			-I/usr/include \
-			-L/usr/lib
-        LDFLAGS += -lopenblas -lm
+        CFLAGS += -I/usr/include
+        LDFLAGS += -L/usr/lib -lopenblas -lm
         PLATFORM_DEFS += -DUSE_ACCELERATE_X86
+
+        ifneq (,$(filter cuda,$(MAKECMDGOALS)))
+            # Inject CUDA Flags
+            CFLAGS += -DUSE_CUDA -I/usr/local/cuda-12.8/include
+            LDFLAGS += -L/usr/local/cuda-12.8/lib64 -lcudart -lcublas
+        endif
+
+    .PHONY: cuda
+    cuda: $(if $(filter small medium large,$(MAKECMDGOALS)),,all)
+        @:
     else
         $(error This Makefile is configured to support ONLY x86_64 architecture on Linux. Detected OS: "$(DETECTED_OS)", Architecture: "$(DETECTED_ARCH)")
 
