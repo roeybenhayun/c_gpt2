@@ -16,10 +16,12 @@ weights/*
 !weights/.gitkeep
 # ───────── Build / logs ─────────
 out/*
+!out/.gitkeep
 logs/*
 
 # ───────── Local env / editors ─────────
 transformers_env/
+transformer_env/
 .vscode/
 
 
