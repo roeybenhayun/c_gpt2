@@ -18,6 +18,7 @@ weights/*
 out/*
 !out/.gitkeep
 logs/*
+unit_modules/c/dot_2d/out/*
 
 # ───────── Local env / editors ─────────
 transformers_env/
