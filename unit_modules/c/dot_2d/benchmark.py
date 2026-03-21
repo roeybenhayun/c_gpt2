@@ -324,7 +324,7 @@ def _plot_speedup(ax, sizes, speedups, standalone=False):
 
     for bar, val in zip(bars, speedups):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                f"{val:.0f}x", ha="center", va="bottom", fontsize=9, fontweight="bold")
+                f"{val:.1f}x", ha="center", va="bottom", fontsize=9, fontweight="bold")
 
 
 def _plot_table(ax, results, standalone=False):
@@ -450,6 +450,85 @@ def create_plots(results, hw_info):
         print(f"Individual plot saved to: {p}")
 
 
+def run_ncu_profile(size):
+    """Run ncu to collect L1/L2 cache hit rates for a given matrix size."""
+    print(f"  Profiling N={size} with ncu...", end="", flush=True)
+
+    try:
+        result = subprocess.run(
+            [
+                "sudo", "/usr/local/cuda-12.8/bin/ncu",
+                "--metrics", "l1tex__t_sector_hit_rate.pct,lts__t_sector_hit_rate.pct",
+                "--csv",
+                str(BINARY), str(size),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except FileNotFoundError:
+        print(" ncu not found, skipping.")
+        return None
+    except subprocess.TimeoutExpired:
+        print(" TIMEOUT")
+        return None
+
+    if result.returncode != 0:
+        print(f" FAILED (exit code {result.returncode})")
+        if result.stderr:
+            print(f"  stderr: {result.stderr[:200]}")
+        return None
+
+    # Parse CSV output from ncu
+    # Lines starting with "=" are headers/separators; data lines are CSV
+    metrics = {}
+    for line in result.stdout.splitlines():
+        if line.startswith('"') or (line and line[0].isalpha()):
+            # skip header row
+            continue
+        if "l1tex__t_sector_hit_rate" in line or "lts__t_sector_hit_rate" in line:
+            # ncu CSV: each metric appears as a row
+            pass
+
+    # Simpler approach: parse all CSV data lines
+    l1_hit_rates = []
+    l2_hit_rates = []
+    for line in result.stdout.splitlines():
+        if "l1tex__t_sector_hit_rate" in line:
+            # Extract the last numeric field (the value)
+            parts = line.split(",")
+            for part in reversed(parts):
+                part = part.strip().strip('"')
+                try:
+                    l1_hit_rates.append(float(part))
+                    break
+                except ValueError:
+                    continue
+        elif "lts__t_sector_hit_rate" in line:
+            parts = line.split(",")
+            for part in reversed(parts):
+                part = part.strip().strip('"')
+                try:
+                    l2_hit_rates.append(float(part))
+                    break
+                except ValueError:
+                    continue
+
+    entry = {
+        "matrix_size": size,
+        "l1_hit_rate_pct": l1_hit_rates if l1_hit_rates else None,
+        "l2_hit_rate_pct": l2_hit_rates if l2_hit_rates else None,
+        "l1_hit_rate_avg_pct": sum(l1_hit_rates) / len(l1_hit_rates) if l1_hit_rates else None,
+        "l2_hit_rate_avg_pct": sum(l2_hit_rates) / len(l2_hit_rates) if l2_hit_rates else None,
+        "raw_stdout": result.stdout,
+    }
+
+    l1_avg = f"{entry['l1_hit_rate_avg_pct']:.1f}%" if entry["l1_hit_rate_avg_pct"] is not None else "N/A"
+    l2_avg = f"{entry['l2_hit_rate_avg_pct']:.1f}%" if entry["l2_hit_rate_avg_pct"] is not None else "N/A"
+    print(f" L1={l1_avg} L2={l2_avg}")
+    return entry
+
+
 def main():
     if not BINARY.exists():
         print(f"Binary not found at {BINARY}. Run 'make' first.")
@@ -488,6 +567,28 @@ def main():
 
     # Create plots
     create_plots(results, hw_info)
+
+    # Run ncu profiling for cache hit rates
+    print("\nRunning ncu cache profiling...")
+    ncu_results = []
+    for cfg in BENCHMARK_CONFIGS:
+        entry = run_ncu_profile(cfg["size"])
+        if entry:
+            ncu_results.append(entry)
+
+    if ncu_results:
+        ncu_report = {
+            "hardware": hw_info,
+            "metrics": ["l1tex__t_sector_hit_rate.pct", "lts__t_sector_hit_rate.pct"],
+            "timestamp": datetime.now().isoformat(),
+            "profiles": ncu_results,
+        }
+        ncu_json_path = OUTPUT_DIR / "ncu_benchmark_results.json"
+        with open(ncu_json_path, "w") as f:
+            json.dump(ncu_report, f, indent=2)
+        print(f"\nNCU benchmark results saved to: {ncu_json_path}")
+    else:
+        print("\nNo ncu profiling results collected.")
 
 
 if __name__ == "__main__":

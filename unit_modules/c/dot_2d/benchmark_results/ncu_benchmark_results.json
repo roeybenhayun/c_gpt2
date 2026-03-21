@@ -1,0 +1,232 @@
+{
+  "hardware": {
+    "cpu_model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "cpu_threads": "32",
+    "cpu_cores": "16",
+    "cpu_max_ghz": "5.76",
+    "ram_total": "91Gi",
+    "gpu_model": "NVIDIA GeForce RTX 5080",
+    "gpu_vram_mib": "16303",
+    "gpu_compute_cap": "12.0",
+    "gpu_driver": "590.44.01",
+    "cuda_version": "13.1",
+    "cublas_lib": "libcublas.so.12",
+    "os": "Linux-6.17.0-14-generic-x86_64-with-glibc2.39",
+    "timestamp": "2026-03-14T08:15:44.099684"
+  },
+  "metrics": [
+    "l1tex__t_sector_hit_rate.pct",
+    "lts__t_sector_hit_rate.pct"
+  ],
+  "timestamp": "2026-03-14T08:18:03.446847",
+  "profiles": [
+    {
+      "matrix_size": 512,
+      "l1_hit_rate_pct": [
+        7.12,
+        7.15,
+        7.1,
+        7.03,
+        7.17,
+        7.11,
+        7.07,
+        7.1
+      ],
+      "l2_hit_rate_pct": [
+        88.47,
+        88.51,
+        88.45,
+        88.48,
+        88.44,
+        88.28,
+        88.46,
+        88.47
+      ],
+      "l1_hit_rate_avg_pct": 7.10625,
+      "l2_hit_rate_avg_pct": 88.445,
+      "raw_stdout": "==PROF== Connected to process 45537 (/home/rbh/projects/c_gpt2/unit_modules/c/dot_2d/out/dot_2d_gpu)\n=== dot_2d benchmark N=512 ===\nGPU: avg=0.074584s  min=0.074083s  TFLOPS=0.00\nCPU: avg=0.000266s  min=0.000256s  TFLOPS=1.01\nSpeedup (CPU/GPU): 0.00x\nValidation: PASS (max_diff=0.00012207, max_rel=0.00000094)\n==PROF== Disconnected from process 45537\n\"ID\",\"Process ID\",\"Process Name\",\"Host Name\",\"Kernel Name\",\"Context\",\"Stream\",\"Block Size\",\"Grid Size\",\"Device\",\"CC\",\"Section Name\",\"Metric Name\",\"Metric Unit\",\"Metric Value\"\n\"0\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.12\"\n\"0\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"88.47\"\n\"1\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.15\"\n\"1\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"88.51\"\n\"2\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.10\"\n\"2\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"88.45\"\n\"3\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.03\"\n\"3\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"88.48\"\n\"4\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.17\"\n\"4\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"88.44\"\n\"5\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.11\"\n\"5\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"88.28\"\n\"6\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.07\"\n\"6\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"88.46\"\n\"7\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.10\"\n\"7\",\"45537\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x32_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(64, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"88.47\"\n"
+    },
+    {
+      "matrix_size": 768,
+      "l1_hit_rate_pct": [
+        7.81,
+        7.8,
+        7.86,
+        7.87,
+        7.77,
+        7.88,
+        7.76,
+        7.88
+      ],
+      "l2_hit_rate_pct": [
+        87.59,
+        87.49,
+        87.52,
+        87.48,
+        87.44,
+        87.38,
+        87.47,
+        87.28
+      ],
+      "l1_hit_rate_avg_pct": 7.828749999999999,
+      "l2_hit_rate_avg_pct": 87.45625,
+      "raw_stdout": "==PROF== Connected to process 45663 (/home/rbh/projects/c_gpt2/unit_modules/c/dot_2d/out/dot_2d_gpu)\n=== dot_2d benchmark N=768 ===\nGPU: avg=0.074153s  min=0.073320s  TFLOPS=0.01\nCPU: avg=0.000562s  min=0.000558s  TFLOPS=1.61\nSpeedup (CPU/GPU): 0.01x\nValidation: PASS (max_diff=0.00012207, max_rel=0.00000065)\n==PROF== Disconnected from process 45663\n\"ID\",\"Process ID\",\"Process Name\",\"Host Name\",\"Kernel Name\",\"Context\",\"Stream\",\"Block Size\",\"Grid Size\",\"Device\",\"CC\",\"Section Name\",\"Metric Name\",\"Metric Unit\",\"Metric Value\"\n\"0\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.81\"\n\"0\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.59\"\n\"1\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.80\"\n\"1\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.49\"\n\"2\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.86\"\n\"2\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.52\"\n\"3\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.87\"\n\"3\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.48\"\n\"4\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.77\"\n\"4\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.44\"\n\"5\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.88\"\n\"5\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.38\"\n\"6\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.76\"\n\"6\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.47\"\n\"7\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"7.88\"\n\"7\",\"45663\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_128x64_8x5_nn_align1>(Params)\",\"1\",\"7\",\"(128, 1, 1)\",\"(96, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.28\"\n"
+    },
+    {
+      "matrix_size": 1024,
+      "l1_hit_rate_pct": [
+        18.77,
+        18.79,
+        18.77,
+        18.77,
+        18.8,
+        18.77,
+        18.78,
+        18.78
+      ],
+      "l2_hit_rate_pct": [
+        86.13,
+        86.24,
+        86.25,
+        86.29,
+        86.27,
+        86.04,
+        86.28,
+        83.2
+      ],
+      "l1_hit_rate_avg_pct": 18.77875,
+      "l2_hit_rate_avg_pct": 85.8375,
+      "raw_stdout": "==PROF== Connected to process 45756 (/home/rbh/projects/c_gpt2/unit_modules/c/dot_2d/out/dot_2d_gpu)\n=== dot_2d benchmark N=1024 ===\nGPU: avg=0.074583s  min=0.073253s  TFLOPS=0.03\nCPU: avg=0.001120s  min=0.001065s  TFLOPS=1.92\nSpeedup (CPU/GPU): 0.02x\nValidation: PASS (max_diff=0.00021362, max_rel=0.00000082)\n==PROF== Disconnected from process 45756\n\"ID\",\"Process ID\",\"Process Name\",\"Host Name\",\"Kernel Name\",\"Context\",\"Stream\",\"Block Size\",\"Grid Size\",\"Device\",\"CC\",\"Section Name\",\"Metric Name\",\"Metric Unit\",\"Metric Value\"\n\"0\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"18.77\"\n\"0\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"86.13\"\n\"1\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"18.79\"\n\"1\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"86.24\"\n\"2\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"18.77\"\n\"2\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"86.25\"\n\"3\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"18.77\"\n\"3\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"86.29\"\n\"4\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"18.80\"\n\"4\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"86.27\"\n\"5\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"18.77\"\n\"5\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"86.04\"\n\"6\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"18.78\"\n\"6\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"86.28\"\n\"7\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"18.78\"\n\"7\",\"45756\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(32, 1, 5)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"83.20\"\n"
+    },
+    {
+      "matrix_size": 2048,
+      "l1_hit_rate_pct": [
+        6.82,
+        6.82,
+        6.82,
+        6.82,
+        6.81,
+        6.82,
+        6.82,
+        6.82
+      ],
+      "l2_hit_rate_pct": [
+        89.11,
+        89.94,
+        89.92,
+        89.83,
+        89.68,
+        89.88,
+        89.9,
+        89.9
+      ],
+      "l1_hit_rate_avg_pct": 6.8187500000000005,
+      "l2_hit_rate_avg_pct": 89.77,
+      "raw_stdout": "==PROF== Connected to process 45862 (/home/rbh/projects/c_gpt2/unit_modules/c/dot_2d/out/dot_2d_gpu)\n=== dot_2d benchmark N=2048 ===\nGPU: avg=0.078437s  min=0.077424s  TFLOPS=0.22\nCPU: avg=0.005992s  min=0.005883s  TFLOPS=2.87\nSpeedup (CPU/GPU): 0.08x\nValidation: PASS (max_diff=0.00067139, max_rel=0.00000135)\n==PROF== Disconnected from process 45862\n\"ID\",\"Process ID\",\"Process Name\",\"Host Name\",\"Kernel Name\",\"Context\",\"Stream\",\"Block Size\",\"Grid Size\",\"Device\",\"CC\",\"Section Name\",\"Metric Name\",\"Metric Unit\",\"Metric Value\"\n\"0\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"6.82\"\n\"0\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"89.11\"\n\"1\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"6.82\"\n\"1\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"89.94\"\n\"2\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"6.82\"\n\"2\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"89.92\"\n\"3\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"6.82\"\n\"3\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"89.83\"\n\"4\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"6.81\"\n\"4\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"89.68\"\n\"5\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"6.82\"\n\"5\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"89.88\"\n\"6\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"6.82\"\n\"6\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"89.90\"\n\"7\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"6.82\"\n\"7\",\"45862\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(128, 1, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"89.90\"\n"
+    },
+    {
+      "matrix_size": 4096,
+      "l1_hit_rate_pct": [
+        3.72,
+        3.72,
+        3.72,
+        3.72,
+        3.72,
+        3.72,
+        3.72,
+        3.72
+      ],
+      "l2_hit_rate_pct": [
+        89.08,
+        88.92,
+        88.99,
+        88.64,
+        88.73,
+        88.77,
+        89.1,
+        89.13
+      ],
+      "l1_hit_rate_avg_pct": 3.72,
+      "l2_hit_rate_avg_pct": 88.92,
+      "raw_stdout": "==PROF== Connected to process 45968 (/home/rbh/projects/c_gpt2/unit_modules/c/dot_2d/out/dot_2d_gpu)\n=== dot_2d benchmark N=4096 ===\nGPU: avg=0.098150s  min=0.096079s  TFLOPS=1.40\nCPU: avg=0.042058s  min=0.041347s  TFLOPS=3.27\nSpeedup (CPU/GPU): 0.43x\nValidation: PASS (max_diff=0.00183105, max_rel=0.00000182)\n==PROF== Disconnected from process 45968\n\"ID\",\"Process ID\",\"Process Name\",\"Host Name\",\"Kernel Name\",\"Context\",\"Stream\",\"Block Size\",\"Grid Size\",\"Device\",\"CC\",\"Section Name\",\"Metric Name\",\"Metric Unit\",\"Metric Value\"\n\"0\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"3.72\"\n\"0\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"89.08\"\n\"1\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"3.72\"\n\"1\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"88.92\"\n\"2\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"3.72\"\n\"2\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"88.99\"\n\"3\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"3.72\"\n\"3\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"88.64\"\n\"4\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"3.72\"\n\"4\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"88.73\"\n\"5\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"3.72\"\n\"5\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"88.77\"\n\"6\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"3.72\"\n\"6\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"89.10\"\n\"7\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"3.72\"\n\"7\",\"45968\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(256, 2, 3)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"89.13\"\n"
+    },
+    {
+      "matrix_size": 8192,
+      "l1_hit_rate_pct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "l2_hit_rate_pct": [
+        87.7,
+        87.69,
+        87.68,
+        87.7,
+        87.69,
+        87.69,
+        87.69,
+        87.69
+      ],
+      "l1_hit_rate_avg_pct": 0.0,
+      "l2_hit_rate_avg_pct": 87.69125,
+      "raw_stdout": "==PROF== Connected to process 46073 (/home/rbh/projects/c_gpt2/unit_modules/c/dot_2d/out/dot_2d_gpu)\n=== dot_2d benchmark N=8192 ===\nGPU: avg=0.198039s  min=0.191841s  TFLOPS=5.55\nCPU: avg=0.306301s  min=0.302269s  TFLOPS=3.59\nSpeedup (CPU/GPU): 1.55x\nValidation: PASS (max_diff=0.01538086, max_rel=0.00000742)\n==PROF== Disconnected from process 46073\n\"ID\",\"Process ID\",\"Process Name\",\"Host Name\",\"Kernel Name\",\"Context\",\"Stream\",\"Block Size\",\"Grid Size\",\"Device\",\"CC\",\"Section Name\",\"Metric Name\",\"Metric Unit\",\"Metric Value\"\n\"0\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"0\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.70\"\n\"1\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"1\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.69\"\n\"2\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"2\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.68\"\n\"3\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"3\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.70\"\n\"4\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"4\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.69\"\n\"5\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"5\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.69\"\n\"6\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"6\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.69\"\n\"7\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"7\",\"46073\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(512, 4, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"87.69\"\n"
+    },
+    {
+      "matrix_size": 12288,
+      "l1_hit_rate_pct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "l2_hit_rate_pct": [
+        49.58,
+        48.4,
+        48.96,
+        48.68,
+        50.06,
+        48.23,
+        48.07,
+        49.31
+      ],
+      "l1_hit_rate_avg_pct": 0.0,
+      "l2_hit_rate_avg_pct": 48.91125,
+      "raw_stdout": "==PROF== Connected to process 46212 (/home/rbh/projects/c_gpt2/unit_modules/c/dot_2d/out/dot_2d_gpu)\n=== dot_2d benchmark N=12288 ===\nGPU: avg=0.439215s  min=0.433896s  TFLOPS=8.45\nCPU: avg=0.982998s  min=0.980843s  TFLOPS=3.78\nSpeedup (CPU/GPU): 2.24x\nValidation: PASS (max_diff=0.03027344, max_rel=0.00000989)\n==PROF== Disconnected from process 46212\n\"ID\",\"Process ID\",\"Process Name\",\"Host Name\",\"Kernel Name\",\"Context\",\"Stream\",\"Block Size\",\"Grid Size\",\"Device\",\"CC\",\"Section Name\",\"Metric Name\",\"Metric Unit\",\"Metric Value\"\n\"0\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"0\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"49.58\"\n\"1\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"1\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"48.40\"\n\"2\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"2\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"48.96\"\n\"3\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"3\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"48.68\"\n\"4\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"4\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"50.06\"\n\"5\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"5\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"48.23\"\n\"6\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"6\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"48.07\"\n\"7\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"7\",\"46212\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(768, 6, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"49.31\"\n"
+    },
+    {
+      "matrix_size": 16384,
+      "l1_hit_rate_pct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "l2_hit_rate_pct": [
+        82.03,
+        84.32,
+        83.85,
+        80.89,
+        82.79,
+        81.98,
+        83.28,
+        84.28
+      ],
+      "l1_hit_rate_avg_pct": 0.0,
+      "l2_hit_rate_avg_pct": 82.9275,
+      "raw_stdout": "==PROF== Connected to process 46343 (/home/rbh/projects/c_gpt2/unit_modules/c/dot_2d/out/dot_2d_gpu)\n=== dot_2d benchmark N=16384 ===\nGPU: avg=0.879076s  min=0.877813s  TFLOPS=10.01\nCPU: avg=2.400775s  min=2.386748s  TFLOPS=3.66\nSpeedup (CPU/GPU): 2.73x\nValidation: PASS (max_diff=0.03955078, max_rel=0.00000965)\n==PROF== Disconnected from process 46343\n\"ID\",\"Process ID\",\"Process Name\",\"Host Name\",\"Kernel Name\",\"Context\",\"Stream\",\"Block Size\",\"Grid Size\",\"Device\",\"CC\",\"Section Name\",\"Metric Name\",\"Metric Unit\",\"Metric Value\"\n\"0\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"0\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"82.03\"\n\"1\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"1\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"84.32\"\n\"2\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"2\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"83.85\"\n\"3\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"3\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"80.89\"\n\"4\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"4\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"82.79\"\n\"5\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"5\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"81.98\"\n\"6\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"6\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"83.28\"\n\"7\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"l1tex__t_sector_hit_rate.pct\",\"%\",\"0\"\n\"7\",\"46343\",\"dot_2d_gpu\",\"127.0.0.1\",\"void Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(Params)\",\"1\",\"7\",\"(256, 1, 1)\",\"(1024, 8, 1)\",\"0\",\"12.0\",\"Command line profiler metrics\",\"lts__t_sector_hit_rate.pct\",\"%\",\"84.28\"\n"
+    }
+  ]
+}

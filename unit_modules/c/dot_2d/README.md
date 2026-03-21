@@ -57,6 +57,21 @@ This will:
    - `plot_speedup.png` - GPU speedup factor
    - `plot_reference_table.png` - model reference table
 
+## Run with Nvidia Nsight Compute (NCU)
+ncu --metrics l1tex__t_sector_hit_rate.pct,lts__t_sector_hit_rate.pct ./dot_2d_gpu
+
+l1tex: specifies the haardware blocks L1 cache and texture cache (same phisical memory inside each SM)
+lts: level 2 cache slice
+__t : directory checking cache hit/miss
+sector: 32-byte chunks of memory
+hit_rate: ratio of successful finds
+.pct: format the output as percentage
+
+Note on Nvidia metric names, from the official documentation for a metric name:
+
+Unit__Subunit_Quantity_Qualifier.RollupMetric
+The double underscore acts as the physical boundary line betweem hw unit and the subunit/action occuring inside it
+
 ## Output structure
 
 ```
