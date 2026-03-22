@@ -36,14 +36,14 @@ else ifeq ($(DETECTED_OS),Linux)
         LDFLAGS += -L/usr/lib -lopenblas -lm
         PLATFORM_DEFS += -DUSE_ACCELERATE_X86
 
-        ifneq (,$(filter cuda,$(MAKECMDGOALS)))
-            # Inject CUDA Flags
-            CFLAGS += -DUSE_CUDA -I/usr/local/cuda-12.8/include
+        ifneq (,$(filter gpu,$(MAKECMDGOALS)))
+            # Inject GPU (CUDA) Flags
+            CFLAGS += -DUSE_GPU -I/usr/local/cuda-12.8/include
             LDFLAGS += -L/usr/local/cuda-12.8/lib64 -lcudart -lcublas
         endif
 
-    .PHONY: cuda
-    cuda: $(if $(filter small medium large,$(MAKECMDGOALS)),,all)
+    .PHONY: gpu
+    gpu: $(if $(filter small medium large,$(MAKECMDGOALS)),,all)
         @:
     else
         $(error This Makefile is configured to support ONLY x86_64 architecture on Linux. Detected OS: "$(DETECTED_OS)", Architecture: "$(DETECTED_ARCH)")
