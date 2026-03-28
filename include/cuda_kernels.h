@@ -22,6 +22,21 @@ void layernorm_cuda(float (*input)[d_model],
                     float eps
                 );
 
+
+void add_bias_cuda
+                (float *a, 
+                    int a_r, 
+                    int a_c, 
+                    float *b);
+            
+void softmax_cuda
+                (float *a, 
+                    int a_r, 
+                    int a_c, 
+                    int stride, 
+                    float *c_out
+                );
+
 #ifdef __cplusplus
 }
 #endif
