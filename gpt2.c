@@ -277,6 +277,20 @@ static void dot_2d_gpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b
     // NOTE: Assumes 'a', 'b', and 'c_out' are pointers to GPU memory.
     cublasHandle_t handle = get_cublas_handle();
 
+    // Surface any pre-existing sticky CUDA error from a previous kernel,
+    // so we don't blame cuBLAS for someone else's fault.
+    {
+        cudaError_t pre = cudaDeviceSynchronize();
+        if (pre != cudaSuccess) {
+            fprintf(stderr,
+                "FATAL: pre-existing CUDA error before cublasSgemm: %s\n"
+                "  dims: a[%d x %d] lda=%d  b[%d x %d] ldb=%d  c[%d x %d] ldc=%d  trans_b=%d\n",
+                cudaGetErrorString(pre),
+                a_r, a_c, lda, b_r, b_c, ldb, c_r, c_c, ldc, transpose_b);
+            abort();
+        }
+    }
+
     float alpha = 1.0f;
     if (apply_attention_scaling) {
         alpha = 1.0f / sqrtf((float)a_c);
@@ -287,16 +301,38 @@ static void dot_2d_gpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b
     const int K = a_c;
     const int N = transpose_b ? b_r : b_c;
 
+
+    const cublasOperation_t opB = transpose_b ? CUBLAS_OP_T : CUBLAS_OP_N;
+    const cublasOperation_t opA = CUBLAS_OP_N;
+
     // Row-Major to Column-Major trick for cuBLAS
-    const cublasOperation_t opB = transpose_b ? CUBLAS_OP_N : CUBLAS_OP_T;
-    const cublasOperation_t opA = CUBLAS_OP_T;
+    //const cublasOperation_t opB = transpose_b ? CUBLAS_OP_N : CUBLAS_OP_T;
+    //const cublasOperation_t opA = CUBLAS_OP_T;
 
     cublasStatus_t stat = cublasSgemm(handle, opB, opA, N, M, K, &alpha,
                                       b, ldb, a, lda, &beta, c_out, ldc);
 
     if (stat != CUBLAS_STATUS_SUCCESS) {
-        fprintf(stderr, "FATAL: cublasSgemm failed\n");
-        exit(1);
+        fprintf(stderr,
+            "FATAL: cublasSgemm failed with status %d\n"
+            "  dims: a[%d x %d] lda=%d  b[%d x %d] ldb=%d  c[%d x %d] ldc=%d  trans_b=%d\n"
+            "  cublas: M=%d N=%d K=%d\n",
+            stat, a_r, a_c, lda, b_r, b_c, ldb, c_r, c_c, ldc, transpose_b, M, N, K);
+        abort();
+    }
+
+    // Force a sync so any execution failure from THIS sgemm is attributed here
+    // (and not to whatever comes next).
+    {
+        cudaError_t post = cudaDeviceSynchronize();
+        if (post != cudaSuccess) {
+            fprintf(stderr,
+                "FATAL: cudaDeviceSynchronize after cublasSgemm failed: %s\n"
+                "  dims: a[%d x %d] lda=%d  b[%d x %d] ldb=%d  c[%d x %d] ldc=%d  trans_b=%d\n",
+                cudaGetErrorString(post),
+                a_r, a_c, lda, b_r, b_c, ldb, c_r, c_c, ldc, transpose_b);
+            abort();
+        }
     }
 }
 
@@ -593,6 +629,12 @@ float (*X1_out_d)[d_ff];
 float (*X2_d)[d_model];
 float (*X2_out_d)[d_model];
 float (*Xf_out_d)[d_model];
+
+float (*final_attention_output_d)[d_model];
+float (*context_heads_d)[ctx_len][head_dim];
+
+float (*logits_d)[vocab_size];
+
 #endif
 
 float temp_attn_weight[3*d_model][d_model] = {}; // 2304 = 768 * 3
@@ -704,7 +746,16 @@ static void allocate_weights_gpu(void){
     CUDA_CHECK(cudaMalloc(&X2_d, ctx_len * sizeof *X2_d));
     CUDA_CHECK(cudaMalloc(&X2_out_d, ctx_len * sizeof *X2_out_d));
     CUDA_CHECK(cudaMalloc(&Xf_out_d, ctx_len * sizeof *Xf_out_d));
+
+    CUDA_CHECK(cudaMalloc(&final_attention_output_d, ctx_len * sizeof *final_attention_output_d));
+    
+    CUDA_CHECK(cudaMalloc(&context_heads_d, nof_heads* sizeof *context_heads_d));
+    
+    CUDA_CHECK(cudaMalloc(&logits_d, ctx_len * sizeof *logits_d));
+    
+
 }
+
 #endif
 static void allocate_weights_cpu(void){
     size_t allocated_size = 0;
@@ -856,14 +907,15 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
     dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_q,d_model,d_model,d_model,&Q_d[cache_start_index][0],n_new_tokens, d_model,d_model,1,!APPLY_ATTENTION_SCALING);
     add_bias_cuda(&Q_d[cache_start_index][0],n_new_tokens,d_model,tbp->b_q,NULL);
     // final destination pointer in the cache
+    
     float* k_cache_ptr = &K_cache_d[layer_id][cache_start_index][0];
     dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_k,d_model,d_model,d_model,k_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
     add_bias_cuda(k_cache_ptr,n_new_tokens,d_model,tbp->b_k,NULL);
-    //memcpy(&K_cache[layer_id][cache_start_index][0],&K[0][0], n_new_tokens * d_model * sizeof(float));
+    
     float* v_cache_ptr = &V_cache_d[layer_id][cache_start_index][0];
     dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_v,d_model,d_model,d_model,v_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
     add_bias_cuda(v_cache_ptr,n_new_tokens,d_model,tbp->b_v,NULL);
-    //memcpy(&V_cache[layer_id][cache_start_index][0],&V[0][0], n_new_tokens * d_model * sizeof(float));
+    
     last_index = n_tokens;
  
     
@@ -881,31 +933,31 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
         float *q_h;
         float *k_h;
         float *v_h;
-        float *context_h_out = &context_heads[h][0][0];
+        float *context_h_out = &context_heads_d[h][0][0];
 
         k_h = &K_cache_d[layer_id][0][0]+ h * head_dim;
         v_h = &V_cache_d[layer_id][0][0]+ h * head_dim;            
 
         if(n_new_tokens == 1){
             float* q_last_token_h = &Q_d[n_tokens - 1][0] + h * head_dim;
-            float* scores_last_row = &scores_h[n_tokens - 1][0]; 
-            float* weights_last_row = &weights_h[n_tokens - 1][0];
+            float* scores_last_row = &scores_h_d[n_tokens - 1][0]; 
+            float* weights_last_row = &weights_h_d[n_tokens - 1][0];
             float* context_last_row = context_h_out + (n_tokens - 1) * head_dim;
              // 1. Calculate scores: Q_last dot K_all -> [1 x head_dim] @ [head_dim x n_tokens] = [1 x n_tokens]
             dot_2d(q_last_token_h, 1, head_dim, d_model, k_h, n_tokens, head_dim, d_model, scores_last_row, 1, n_tokens, ctx_len, 1, APPLY_ATTENTION_SCALING);
             
             // Causal mask is implicit up to n_tokens-1, no need to apply for the last row.
             // 2. Softmax on the single row of scores
-            softmax_cuda(scores_last_row, 1, n_tokens, ctx_len, weights_last_row);
+            softmax_cuda(scores_last_row, 1, n_tokens, ctx_len, weights_last_row,1.0f);
             // 3. Calculate context: Weights_last dot V_all -> [1 x n_tokens] @ [n_tokens x head_dim] = [1 x head_dim]
             dot_2d(weights_last_row, 1, n_tokens, ctx_len, v_h, n_tokens, head_dim, d_model, context_last_row, 1, head_dim, head_dim, 0, !APPLY_ATTENTION_SCALING);
         } else {
             // prefill
             q_h = &Q_d[0][0]+ h * head_dim;
             dot_2d(q_h,n_tokens,head_dim,d_model,k_h,n_tokens,head_dim,d_model,&scores_h_d[0][0],n_tokens,n_tokens,ctx_len,1,APPLY_ATTENTION_SCALING);
-            apply_casual_masking(&scores_h_d[0][0],ctx_len/*n_tokens*/,n_tokens);
+            casual_masking_cuda(&scores_h_d[0][0],ctx_len/*n_tokens*/,n_tokens);
             //print_2d_tensor("C scores_h[1][i] (before Softmax):",&scores_h[1][0],ctx_len,ctx_len,1,10,0);            
-            softmax_cuda(&scores_h_d[0][0], n_tokens,n_tokens,ctx_len, &weights_h_d[0][0]);        
+            softmax_cuda(&scores_h_d[0][0], n_tokens,n_tokens,ctx_len, &weights_h_d[0][0],1.0f);        
             //print_2d_tensor("C weights_h[1][:10]",&weights_h[1][0],ctx_len,ctx_len,1,10,0);
             dot_2d(&weights_h_d[0][0],n_tokens,n_tokens,ctx_len,v_h,n_tokens,head_dim,d_model,context_h_out,n_tokens,head_dim,head_dim,0,!APPLY_ATTENTION_SCALING);
         }
@@ -916,47 +968,86 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
         // generation phase
 
         // index of the new token
-        int i = n_tokens - 1; 
+        int i = n_tokens - 1; // also cache_start_index
+
         // 1. head concat (for the last token only)
-        for (int h = 0; h < nof_heads; h++) {
+        //for (int h = 0; h < nof_heads; h++) {
             // More efficient to copy the whole head's output for the token at once
-            // ? ? ? 
-            memcpy(&final_attention_output[i][h * head_dim], &context_heads[h][i][0], head_dim * sizeof(float));
-        }
+            // ? ? ?
+        concat_heads_cuda(&context_heads_d[0][0][0],&final_attention_output_d[0][0],i,nof_heads,head_dim,ctx_len);
+            //memcpy(&final_attention_output[i][h * head_dim], &context_heads[h][i][0], head_dim * sizeof(float));
+        //}
         // 2. Attention projection (on the last token only)
-        dot_2d(&final_attention_output[i][0],1,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-        
+        dot_2d(&final_attention_output_d[i][0],1,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context_d[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+
         // Attn projection bias
         add_bias_cuda(&context_d[i][0],1,d_model,tbp->attn_proj_bias,NULL);
-        
+
         // 3. Residual connection
-        add_2d(input + (i * d_model),1,d_model,&context_d[i][0],&residual_out[i][0]);            
+        add_2d_cuda(input + (i * d_model),1,d_model,&context_d[i][0],&residual_out_d[i][0]);
+
+
         // 4. Layer Norm 2 (on the last token only)
-        layernorm_2d(&residual_out_d[i][0],1,d_model,tbp->ln2_gamma,tbp->ln2_beta, &X_norm2_d[i][0],eps);
-        //layernorm_cuda((float (*)[d_model])input,n_tokens,d_model,tbp->ln2_gamma,tbp->ln1_beta, (float (*)[d_model])&X_norm[0][0],eps);
-        
+        layernorm_cuda(&residual_out_d[i][0],1,d_model,tbp->ln2_gamma,tbp->ln2_beta, &X_norm2_d[i][0],eps);
+
+
         // 5. MLP (on the last token only)
-        dot_2d(&X_norm2_d[i][0],1,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out[i][0],1,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
+        dot_2d(&X_norm2_d[i][0],1,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out_d[i][0],1,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
         // W1 bias
         add_bias_cuda(&X1_out_d[i][0],1,d_ff,tbp->b1,NULL);
         // GELU activation
-        gelu_2d(&X1_out_d[i][0],d_ff,1,NULL);
-        // W2 
+        gelu_cuda(&X1_out_d[i][0],d_ff,1,NULL);
+        // W2
         dot_2d(&X1_out_d[i][0],1,d_ff,d_ff,tbp->W2,d_model,d_ff,d_ff,&X2_out_d[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
         // W2 bias
         add_bias_cuda(&X2_out_d[i][0],1,d_model,tbp->b2,NULL);
-        
+
         // 6. Final Residual Connection (for the last token only)
         // First, preserve the state of previous tokens by copying them over
         if (i > 0) {
-            memcpy(&residual2_out[0][0], input, i * d_model * sizeof(float));
+            cudaMemcpy(&residual2_out_d[0][0], input, i * d_model * sizeof(float), cudaMemcpyDeviceToDevice);
+            //memcpy(&residual2_out[0][0], input, i * d_model * sizeof(float));
         }
-        // Then, calculate the new residual for the last token
-        add_bias_cuda(&residual_out_d[i][0], 1, d_model, &X2_out_d[i][0], &residual2_out_d[i][0]);
+        // Then, calculate the new residual for the last token /////CUDA is missing///
+        //add_2d(&X2_out[0][0],n_tokens,d_model,&residual_out[0][0],&residual2_out[0][0]);
+        add_2d_cuda(&residual_out_d[i][0], 1, d_model, &X2_out_d[i][0], &residual2_out_d[i][0]);
 
-    }                   
+    } else {
+        // prefill phase — run the post-attention pipeline for all n_tokens rows
+
+        // 1. head concat for ALL tokens
+        // TODO: replace with a single (token x head x dim) grid kernel for perf
+        for (int t = 0; t < n_tokens; t++) {
+            concat_heads_cuda(&context_heads_d[0][0][0],&final_attention_output_d[0][0],t,nof_heads,head_dim,ctx_len);
+        }
+
+        // 2. Attention projection: [n_tokens x d_model] @ W_proj^T -> context
+        dot_2d(&final_attention_output_d[0][0],n_tokens,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context_d[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+        // Attn projection bias
+        add_bias_cuda(&context_d[0][0],n_tokens,d_model,tbp->attn_proj_bias,NULL);
+
+        // 3. Residual connection
+        add_2d_cuda(input,n_tokens,d_model,&context_d[0][0],&residual_out_d[0][0]);
+
+        // 4. Layer Norm 2
+        layernorm_cuda((float (*)[d_model])&residual_out_d[0][0],n_tokens,d_model,tbp->ln2_gamma,tbp->ln2_beta,(float (*)[d_model])&X_norm2_d[0][0],eps);
+
+        // 5. MLP
+        dot_2d(&X_norm2_d[0][0],n_tokens,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out_d[0][0],n_tokens,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
+        // W1 bias
+        add_bias_cuda(&X1_out_d[0][0],n_tokens,d_ff,tbp->b1,NULL);
+        // GELU activation
+        gelu_cuda(&X1_out_d[0][0],d_ff,n_tokens,NULL);
+        // W2
+        dot_2d(&X1_out_d[0][0],n_tokens,d_ff,d_ff,tbp->W2,d_model,d_ff,d_ff,&X2_out_d[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+        // W2 bias
+        add_bias_cuda(&X2_out_d[0][0],n_tokens,d_model,tbp->b2,NULL);
+
+        // 6. Final Residual Connection (for all tokens)
+        add_2d_cuda(&residual_out_d[0][0],n_tokens,d_model,&X2_out_d[0][0],&residual2_out_d[0][0]);
+    }
     
-    json_object_set_new(json_root, layer_key, layer_obj);
+    //json_object_set_new(json_root, layer_key, layer_obj);
                         
 }
 #endif
@@ -1361,7 +1452,7 @@ int main(int argc, char *argv[])
     init_layer_table();
     printf("after layer table init\n");
 
-    update_layer_table();
+    //update_layer_table();
 #ifdef USE_CUDA
     
     print_gpu_memory_usage();
@@ -1374,6 +1465,7 @@ int main(int argc, char *argv[])
     load_all_weights(fp);
     fclose(fp);
 
+    update_layer_table();
     printf("load weights...");
 #ifdef USE_CUDA
     print_gpu_memory_usage();
@@ -1404,7 +1496,7 @@ int main(int argc, char *argv[])
     CUDA_CHECK(cudaMemcpy(wte_T_d, wte_T, d_model * sizeof(*wte_T_d), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaDeviceSynchronize());
     print_gpu_memory_usage();
-    return 1;
+    //return 1;
 #endif
 
     float temperature = 1.0;
@@ -1497,11 +1589,20 @@ int main(int argc, char *argv[])
         printf("--- Total Time for Single Forward Pass (O(N^2) Measurement) ---\n");
         printf("Context Length | Total Pass Time (s)\n");
         printf("------------------------------------\n");
+         
 
         for (int ii = 0; ii < requested_out_tokens; ii++){  
             
 #ifdef USE_CUDA
-            CUDA_CHECK(cudaMemcpy(tokens_d,tokens,current_seq_len*sizeof(int),cudaMemcpyHostToDevice));            
+            //fprintf(stderr, "[dbg] ii=%d current_seq_len=%d tokens:", ii, current_seq_len);
+            //for (int _i = 0; _i < current_seq_len; _i++) {
+            //    fprintf(stderr, " %d", tokens[_i]);
+            //    if (tokens[_i] < 0 || tokens[_i] >= vocab_size) {
+            //        fprintf(stderr, "<OOB>");
+            //    }
+            //}
+            //fprintf(stderr, "\n");
+            CUDA_CHECK(cudaMemcpy(tokens_d,tokens,current_seq_len*sizeof(int),cudaMemcpyHostToDevice));
             CUDA_CHECK(cudaDeviceSynchronize());
             embeddings_cuda(wte_d,wpe_d,tokens_d,embeddings_d,current_seq_len);
 #else // CPU
@@ -1515,6 +1616,10 @@ int main(int argc, char *argv[])
             // calculate n_new_tokens once before iterating through layers
             int n_new_tokens = current_seq_len - last_index;
 
+#ifdef USE_CUDA
+            float *current_hidden_state_d = &embeddings_d[0][0];
+#endif
+
             // reset file pointer position to load weights from the right position
             //fseek(fp, offset, SEEK_SET);
             // Infer (loop through layers)
@@ -1524,18 +1629,22 @@ int main(int argc, char *argv[])
                 //printf("nof_tokens=%d\n",n_tokens);
                 #ifdef USE_CUDA 
                 //TODO: use one pointer here (set it before to the right address)
-                    transformer_block(&embeddings_d[0][0],current_seq_len,n_new_tokens, &layer[i],json_root,i,ii);
+                    transformer_block(current_hidden_state_d,current_seq_len,n_new_tokens, &layer[i],json_root,i,ii);
+                    current_hidden_state_d = &residual2_out_d[0][0];
                 #else
                     transformer_block(&embeddings[0][0],current_seq_len,n_new_tokens, &layer[i],json_root,i,ii);
+
+                    if (i < num_layers-1){
+                        memcpy(&embeddings[0][0], &residual2_out[0][0], sizeof(float) * current_seq_len * d_model);
+                    }
+                                                            
+                    //printf("*****Layer %d completed******\n",i);
+
                 #endif
 
                 
                 
-                // Zero out entire embeddings buffer (safe reset)
-                memset(&embeddings[0][0], 0, sizeof(float) * ctx_len * d_model);
-                // use the output from this block as the input to the next block
-                memcpy(&embeddings[0][0], &residual2_out[0][0], sizeof(float) * current_seq_len * d_model);
-                //printf("*****Layer %d completed******\n",i);
+                
 
             }
             //printf("transformer loop done\n");
@@ -1548,18 +1657,18 @@ int main(int argc, char *argv[])
             //fread_or_exit(layer_normf_beta, sizeof(float), d_model, fp);
             
 
-            #ifdef USE_CUDA 
+#ifdef USE_CUDA 
             //print_2d_tensor("C residual2_out[1][:10]:",&residual2_out[1][0],ctx_len,d_model,1,10,0);
 
             // Layer Norm final
-            layernorm_2d(&residual2_out_d[0][0],current_seq_len,d_model,&layer_normf_gamma_d[0],&layer_normf_beta_d[0],&Xf_out[0][0],eps);
+            layernorm_cuda(&residual2_out_d[0][0],current_seq_len,d_model,&layer_normf_gamma_d[0],&layer_normf_beta_d[0],&Xf_out_d[0][0],eps);
             //print_2d_tensor("C Xf_out[1][:10]:",&Xf_out[1][0],ctx_len,d_model,1,10,0);
 
             // get logits
-            dot_2d(&Xf_out_d[0][0],current_seq_len,d_model,d_model,&wte_T[0][0],d_model,vocab_size,vocab_size,&logits[0][0],current_seq_len,vocab_size,vocab_size,0,!APPLY_ATTENTION_SCALING);
+            dot_2d(&Xf_out_d[0][0],current_seq_len,d_model,d_model,&wte_T_d[0][0],d_model,vocab_size,vocab_size,&logits_d[0][0],current_seq_len,vocab_size,vocab_size,0,!APPLY_ATTENTION_SCALING);
             //print_2d_tensor("C logits[1][i]",&logits[1][0],ctx_len,vocab_size,1,10,0);
 
-            #else
+#else
             print_2d_tensor("C residual2_out[1][:10]:",&residual2_out[1][0],ctx_len,d_model,1,10,0);
 
             // Layer Norm final
@@ -1569,10 +1678,21 @@ int main(int argc, char *argv[])
             // get logits
             dot_2d(&Xf_out[0][0],current_seq_len,d_model,d_model,&wte_T[0][0],d_model,vocab_size,vocab_size,&logits[0][0],current_seq_len,vocab_size,vocab_size,0,!APPLY_ATTENTION_SCALING);
             print_2d_tensor("C logits[1][i]",&logits[1][0],ctx_len,vocab_size,1,10,0);
-            #endif
+#endif
             
+            // Compute probabilities
+            float probs[vocab_size];
 
+#ifdef USE_CUDA 
+            float * logit_row_d = &logits_d[last_token_position][0];
+            softmax_cuda(logit_row_d,1,vocab_size,vocab_size,logit_row_d,1.0f);
+            
+            CUDA_CHECK(cudaMemcpy(probs, logit_row_d, vocab_size*sizeof(float), cudaMemcpyDeviceToHost));
 
+            
+            // allocate a buffer for the logic to copy from the gpu. 
+
+#else
             //===========================================SOFTMAX START===================================//
             // --- Search the top 5 ---
             float *logit_row = &logits[last_token_position][0];
@@ -1584,8 +1704,7 @@ int main(int argc, char *argv[])
                 if (val > max_logit) max_logit = val;
             }
 
-            // Compute probabilities
-            float probs[vocab_size];
+            
             float sum = 0.0;
             for (int i = 0; i < vocab_size; i++) {
                 float val = (logit_row[i] / temperature) - max_logit;
@@ -1598,6 +1717,7 @@ int main(int argc, char *argv[])
                 probs[i] /= sum;
             }
             //printf("softmax done");
+    #endif
             //===========================================SOFTMAX END===================================//
 
             //===========================================MULTINOMIAL Sampling START===================================//
@@ -1613,7 +1733,11 @@ int main(int argc, char *argv[])
             //    }
             //}
             //===========================================MULTINOMIAL Sampling END===================================//
-            
+#ifdef USE_CUDA 
+            // copy here to probs[], and continue calc on the cpu
+#else
+
+#endif
             // --- Apply Top-K Sampling ---
             int top_k_val = 40; // Choose your desired K value (e.g., 40, 50, 100)
             // Ensure these arrays are large enough to hold 'top_k_val' elements

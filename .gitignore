@@ -37,3 +37,8 @@ gpt2_large_c_weights.bin
 .DS_Store
 blog/*
 
+# ───────── Unit module executables ─────────
+unit_modules/cuda_c/gelu
+unit_modules/cuda_c/softmax
+unit_modules/cuda_c/casual_masking
+unit_modules/c/add_bias_2d_gpu

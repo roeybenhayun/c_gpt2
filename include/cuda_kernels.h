@@ -27,15 +27,30 @@ void add_bias_cuda
                 (float *a, 
                     int a_r, 
                     int a_c, 
-                    float *b);
+                    float *b,
+                    float *out);
             
 void softmax_cuda
                 (float *a, 
                     int a_r, 
                     int a_c, 
                     int stride, 
-                    float *c_out
+                    float *c_out,
+                    float temperature
                 );
+
+
+void casual_masking_cuda(float *in,
+                                     int stride,
+                                     int tokens);
+
+void gelu_cuda(float *in, int cols, int rows, float *out);
+
+
+void concat_heads_cuda(float *src, float *dest, int token_index, int _nof_heads,int _head_dim, int _ctx_len );
+
+void add_2d_cuda(float *a, int a_r, int a_c, float *b, float * out);
+
 
 #ifdef __cplusplus
 }

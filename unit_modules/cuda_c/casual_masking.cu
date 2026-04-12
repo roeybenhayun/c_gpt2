@@ -6,18 +6,19 @@
 #include <string.h>
 #include <cuda_runtime.h>
 
+
 /*** 
  * How to run this code 
- * nvcc softmax.cu -o softmax
- * ./emb_calc
+ * nvcc casual_masking.cu -o casual_masking
+ * ./caual_masking
  * ***/
 
 
-#define ctx_len (1024) 
-#define  d_model (768)
-
-//#define ctx_len (2) //rows  
-//#define  d_model (4) // columns
+//#define ctx_len (1024) 
+//#define  d_model (768)
+#define nof_tokens (6)
+#define ctx_len (10) //rows  
+#define  d_model (10) // columns
 
 const float eps = 0.00001;
 float input[ctx_len][d_model] = {};
@@ -40,34 +41,19 @@ void init_data(){
     memset(output_gpu,0,ctx_len*d_model*sizeof(float));
 }
 
-__global__ void softmax_kernel(float (*in)[d_model], float (*out)[d_model], int rows, int cols, int stride) {
+__global__ void casual_masking_kernel(float (*in)[d_model], int cols, int tokens) {
     int i = blockIdx.x * blockDim.x + threadIdx.x; 
-    if (i < rows) {
-        float *row_ptr = in[i];
-        float *out_ptr = out[i];
-
-        // 1. Find Max
-        float row_max = -INFINITY;
-        for (int j = 0; j < cols; j++) {
-            if (row_ptr[j] > row_max) row_max = row_ptr[j];
+    if (i < tokens) {
+        float *row_ptr = in[i];                
+        //float row_max = -INFINITY;
+        for (int j = i+1; j < tokens ; j++) {
+            row_ptr[j] = -INFINITY;
         }
 
-        // 2. Sum Exponentials
-        float sum_exp = 0.0f;
-        for (int j = 0; j < cols; j++) {
-            float e = expf(row_ptr[j] - row_max);
-            out_ptr[j] = e;
-            sum_exp += e;
-        }
-
-        // 3. Normalize
-        for (int j = 0; j < cols; j++) {
-            out_ptr[j] /= sum_exp;
-        }
     }
 }
 
-void calc_softmax_gpu(){
+void calc_casual_masking_gpu(){
     // 1. Define Block Size (Threads per block)
     
     dim3 threadsPerBlock;
@@ -76,11 +62,8 @@ void calc_softmax_gpu(){
     threadsPerBlock.z = 1;
     // 2. Define Grid Size (Number of blocks)
     // We divide total size by block size and round up using ceiling division: (N + block - 1) / block
-    int number_of_blocks = ((ctx_len + threadsPerBlock.x - 1) / threadsPerBlock.x);
-    printf("number of blocks = %d", number_of_blocks);
-    
     dim3 numBlocks;
-    numBlocks.x = number_of_blocks;
+    numBlocks.x = ((ctx_len + threadsPerBlock.x - 1) / threadsPerBlock.x);
     numBlocks.y = 1;
     numBlocks.z = 1;
 
@@ -88,7 +71,7 @@ void calc_softmax_gpu(){
     printf("Launching Kernel with Grid(%d, %d) and Block(%d, %d)\n", numBlocks.x, numBlocks.y, threadsPerBlock.x, threadsPerBlock.y);
 
     // 3. Launch Kernel
-    softmax_kernel<<<numBlocks, threadsPerBlock>>>(input_d,output_d,ctx_len,d_model,d_model);
+    casual_masking_kernel<<<numBlocks, threadsPerBlock>>>(input_d,ctx_len,nof_tokens);
     
     // Check for launch errors
     cudaError_t err = cudaGetLastError();
@@ -101,30 +84,12 @@ void calc_softmax_gpu(){
 
 }
 
-static void softmax_2d(float *a, int a_r, int a_c,int stride, float * c_out){    
-    for (int i=0; i<a_r; i++){
-        // 1. Find the maximum value in the current row
-        float row_max = -INFINITY;
-        for (int j=0; j<a_c; j++){
-            if (*(a + i*stride + j) > row_max) {
-                row_max = *(a + i*stride + j);
-            }
+
+static void apply_casual_masking(float * a, int a_c, int size){
+    for (int i = 0; i < size; i++) {
+        for (int j = i + 1; j < size; j++) {
+            a[i * a_c + j] = -INFINITY;
         }
-        // 2. Calculate the exponentials with the maximum subtracted and the sum
-        float sum_exp = 0.0;
-        for (int j = 0; j < a_c; j++) {
-            float shifted = *(a + i * stride + j) - row_max;
-            float exp_val = expf(shifted);
-            *(c_out + i * stride + j) = exp_val;
-            sum_exp += exp_val;
-        }
-        if (sum_exp == 0.0f && i == 1) {
-            printf("WARNING: softmax sum_exp == 0 at row i=%d — input may be all -inf\n", i);
-        }
-        // 3. Normalize
-        for (int j = 0; j < a_c; j++) {
-            *(c_out + i * stride + j) /= sum_exp;
-        }                 
     }
 }
 
@@ -182,13 +147,19 @@ int main(){
     copy_to_gpu();
 
     printf("Computing CPU...\n");
-    softmax_2d(&input[0][0],ctx_len, d_model,d_model,&output[0][0]);
+    apply_casual_masking(&input[0][0],ctx_len, d_model);
   
-    print_array(&output[0][0],ctx_len,d_model);
+    printf("*****CPU RESULTS START\n");
+    print_array(&input[0][0],ctx_len,d_model);
+    printf("*****CPU RESULTS END\n");
 
     printf("Computing GPU...\n");
-    calc_softmax_gpu();
-        
+    calc_casual_masking_gpu();
+
+    printf("*****GPU RESULTS START\n");
+    print_array(&output_d[0][0],ctx_len,d_model);
+    printf("*****GPU RESULTS END\n");
+
     //printf("Verifying...\n");
     verify_results();
 

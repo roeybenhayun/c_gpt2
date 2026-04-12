@@ -6,19 +6,20 @@
 
 
 
-__global__ void add_bias_kernel(float *a, float *b, int a_r, int a_c) {
-        int col = blockIdx.x * blockDim.x + threadIdx.x;
-        int row = blockIdx.y * blockDim.y + threadIdx.y;
-        if (row < a_r && col < a_c) {
-            a[row * a_c + col] += b[col];
-        }
+__global__ void add_2d_kernel(float *a, float *b, float *out, int a_r, int a_c) {
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    if (row < a_r && col < a_c) {
+        int idx = row * a_c + col;
+        out[idx] = a[idx] + b[idx];
+    }
 }
 
-
-//float *a, int a_r, int a_c, float *b, float *out)
-
-extern "C" void add_bias_cuda(float *a, int a_r, int a_c, float *b, float * out)
+extern "C" void add_2d_cuda(float *a, int a_r, int a_c, float *b, float *out)
 {
+    if (out == NULL) {
+        out = a;
+    }
                                      
     // 1. Define Block Size (Threads per block)
     // 16x16 = 256 threads per block. This is a standard, safe size.
@@ -37,17 +38,17 @@ extern "C" void add_bias_cuda(float *a, int a_r, int a_c, float *b, float * out)
     //printf("Launching Kernel with Grid(%d, %d) and Block(%d, %d)\n", numBlocks.x, numBlocks.y, threadsPerBlock.x, threadsPerBlock.y);
 
     // 3. Launch Kernel
-    add_bias_kernel<<<numBlocks, threadsPerBlock>>>(a, b, a_r, a_c);
+    add_2d_kernel<<<numBlocks, threadsPerBlock>>>(a, b, out,a_r, a_c);
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        fprintf(stderr, "FATAL add_bias_cuda launch: %s (a_r=%d a_c=%d)\n",
+        fprintf(stderr, "FATAL add_2d_cuda launch: %s (a_r=%d a_c=%d)\n",
                 cudaGetErrorString(err), a_r, a_c);
         abort();
     }
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
-        fprintf(stderr, "FATAL add_bias_cuda sync: %s (a_r=%d a_c=%d)\n",
+        fprintf(stderr, "FATAL add_2d_cuda sync: %s (a_r=%d a_c=%d)\n",
                 cudaGetErrorString(err), a_r, a_c);
         abort();
     }
