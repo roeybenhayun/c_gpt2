@@ -287,16 +287,19 @@ static void dot_2d_gpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b
     const int K = a_c;
     const int N = transpose_b ? b_r : b_c;
 
-    // Row-Major to Column-Major trick for cuBLAS
-    const cublasOperation_t opB = transpose_b ? CUBLAS_OP_N : CUBLAS_OP_T;
-    const cublasOperation_t opA = CUBLAS_OP_T;
+    const cublasOperation_t opB = transpose_b ? CUBLAS_OP_T : CUBLAS_OP_N;
+    const cublasOperation_t opA = CUBLAS_OP_N;
 
     cublasStatus_t stat = cublasSgemm(handle, opB, opA, N, M, K, &alpha,
                                       b, ldb, a, lda, &beta, c_out, ldc);
 
     if (stat != CUBLAS_STATUS_SUCCESS) {
-        fprintf(stderr, "FATAL: cublasSgemm failed\n");
-        exit(1);
+        fprintf(stderr,
+            "FATAL: cublasSgemm failed with status %d\n"
+            "  dims: a[%d x %d] lda=%d  b[%d x %d] ldb=%d  c[%d x %d] ldc=%d  trans_b=%d\n"
+            "  cublas: M=%d N=%d K=%d\n",
+            stat, a_r, a_c, lda, b_r, b_c, ldb, c_r, c_c, ldc, transpose_b, M, N, K);
+        abort();
     }
 }
 
@@ -490,6 +493,7 @@ struct timespec start,end;
 
 
 #ifdef ENABLE_KV_CACHE
+
 int kv_cache_enabled = 1;
 #else
 int kv_cache_enabled = 0;
@@ -540,10 +544,10 @@ float (*layer_norm2_beta)[d_model];
 #ifdef USE_CUDA
 int *tokens_d;
 float (*embeddings_d)[d_model];
-float X_norm_d[ctx_len][d_model];
-float X_norm2_d[ctx_len][d_model];
-float residual_out_d[ctx_len][d_model];
-float residual2_out_d[ctx_len][d_model];
+float (*X_norm_d)[d_model];
+float (*X_norm2_d)[d_model];
+float (*residual_out_d)[d_model];
+float (*residual2_out_d)[d_model];
 
 /***  Global weights ***/
 float (*wte_d)[d_model];
@@ -551,7 +555,7 @@ float (*wte_T_d)[vocab_size];
 float (*wpe_d)[d_model];
 
 /***  Attention (per-layer) ***/
-float (*W_q_d)[d_model][d_model];// 
+float (*W_q_d)[d_model][d_model];
 float (*W_k_d)[d_model][d_model]; 
 float (*W_v_d)[d_model][d_model];
 float (*b_q_d)[d_model];
@@ -577,6 +581,27 @@ float (*layer_norm2_beta_d)[d_model];
 float *layer_normf_gamma_d;       // Final Layer Norm Gamma [d_model]
 float *layer_normf_beta_d;        // Final Layer Norm Beta [d_model]
 
+float (*K_cache_d)[ctx_len][d_model]; // Pointer to layers of [ctx_len][d_model]
+float (*V_cache_d)[ctx_len][d_model];
+
+float (*Q_d)[d_model];
+
+float (*scores_h_d)[ctx_len];
+float (*weights_h_d)[ctx_len];
+
+float (*context_d)[d_model];
+
+
+float (*X1_d)[d_ff];
+float (*X1_out_d)[d_ff];
+float (*X2_d)[d_model];
+float (*X2_out_d)[d_model];
+float (*Xf_out_d)[d_model];
+
+float (*final_attention_output_d)[d_model];
+float (*context_heads_d)[ctx_len][head_dim];
+
+float (*logits_d)[vocab_size];
 
 #endif
 
@@ -645,38 +670,60 @@ static void transformer_block_cpu(float *input,int n_tokens,int n_new_tokens,
 
 #ifdef USE_CUDA
 static void allocate_weights_gpu(void){
-    CUDA_CHECK(cudaMalloc((void**)&wte_d, vocab_size * sizeof *wte_d));
-    CUDA_CHECK(cudaMalloc((void**)&wpe_d, ctx_len * sizeof *wpe_d));
-    CUDA_CHECK(cudaMalloc((void**)&wte_T_d, d_model * sizeof *wte_T_d));
+    CUDA_CHECK(cudaMalloc(&wte_d, vocab_size * sizeof *wte_d));
+    CUDA_CHECK(cudaMalloc(&wpe_d, ctx_len * sizeof *wpe_d));
+    CUDA_CHECK(cudaMalloc(&wte_T_d, d_model * sizeof *wte_T_d));
 
-    CUDA_CHECK(cudaMalloc((void**)&W_q_d, num_layers * sizeof *W_q_d));
-    CUDA_CHECK(cudaMalloc((void**)&W_k_d,num_layers * sizeof *W_k_d));
-    CUDA_CHECK(cudaMalloc((void**)&W_v_d,num_layers * sizeof *W_v_d));
-    CUDA_CHECK(cudaMalloc((void**)&b_q_d,num_layers * sizeof *b_q_d));
-    CUDA_CHECK(cudaMalloc((void**)&b_k_d,num_layers * sizeof *b_k_d));
-    CUDA_CHECK(cudaMalloc((void**)&b_v_d,num_layers * sizeof *b_v_d));
-    CUDA_CHECK(cudaMalloc((void**)&attn_proj_weight_d,num_layers * sizeof *attn_proj_weight_d));
-    CUDA_CHECK(cudaMalloc((void**)&attn_proj_bias_d,num_layers * sizeof *attn_proj_bias_d));
-    CUDA_CHECK(cudaMalloc((void**)&W1_d,num_layers * sizeof *W1_d));
-    CUDA_CHECK(cudaMalloc((void**)&W2_d,num_layers * sizeof *W2_d));
-    CUDA_CHECK(cudaMalloc((void**)&b1_d,num_layers * sizeof *b1_d));
-    CUDA_CHECK(cudaMalloc((void**)&b2_d,num_layers * sizeof *b2_d));
-    CUDA_CHECK(cudaMalloc((void**)&layer_norm1_gamma_d,num_layers * sizeof *layer_norm1_gamma_d));
-    CUDA_CHECK(cudaMalloc((void**)&layer_norm1_beta_d,num_layers * sizeof *layer_norm1_beta_d));
-    CUDA_CHECK(cudaMalloc((void**)&layer_norm2_gamma_d,num_layers * sizeof *layer_norm2_gamma_d));
-    CUDA_CHECK(cudaMalloc((void**)&layer_norm2_beta_d,num_layers * sizeof *layer_norm2_beta_d));
+    CUDA_CHECK(cudaMalloc(&W_q_d, num_layers * sizeof *W_q_d));
+    CUDA_CHECK(cudaMalloc(&W_k_d, num_layers * sizeof *W_k_d));
+    CUDA_CHECK(cudaMalloc(&W_v_d, num_layers * sizeof *W_v_d));
+    CUDA_CHECK(cudaMalloc(&b_q_d, num_layers * sizeof *b_q_d));
+    CUDA_CHECK(cudaMalloc(&b_k_d, num_layers * sizeof *b_k_d));
+    CUDA_CHECK(cudaMalloc(&b_v_d, num_layers * sizeof *b_v_d));
+    CUDA_CHECK(cudaMalloc(&attn_proj_weight_d, num_layers * sizeof *attn_proj_weight_d));
+    CUDA_CHECK(cudaMalloc(&attn_proj_bias_d, num_layers * sizeof *attn_proj_bias_d));
+    CUDA_CHECK(cudaMalloc(&W1_d, num_layers * sizeof *W1_d));
+    CUDA_CHECK(cudaMalloc(&W2_d, num_layers * sizeof *W2_d));
+    CUDA_CHECK(cudaMalloc(&b1_d, num_layers * sizeof *b1_d));
+    CUDA_CHECK(cudaMalloc(&b2_d, num_layers * sizeof *b2_d));
+    CUDA_CHECK(cudaMalloc(&layer_norm1_gamma_d, num_layers * sizeof *layer_norm1_gamma_d));
+    CUDA_CHECK(cudaMalloc(&layer_norm1_beta_d, num_layers * sizeof *layer_norm1_beta_d));
+    CUDA_CHECK(cudaMalloc(&layer_norm2_gamma_d, num_layers * sizeof *layer_norm2_gamma_d));
+    CUDA_CHECK(cudaMalloc(&layer_norm2_beta_d, num_layers * sizeof *layer_norm2_beta_d));
 
-    CUDA_CHECK(cudaMalloc((void**)&layer_normf_gamma_d, d_model * sizeof(float)));
-    CUDA_CHECK(cudaMalloc((void**)&layer_normf_beta_d, d_model * sizeof(float)));
-    CUDA_CHECK(cudaMalloc((void**)&tokens_d,ctx_len * sizeof(int)));
-    CUDA_CHECK(cudaMalloc((void**)&embeddings_d,ctx_len * d_model* sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&layer_normf_gamma_d, d_model * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&layer_normf_beta_d, d_model * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&tokens_d, ctx_len * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&embeddings_d, ctx_len * sizeof *embeddings_d));
 
-    CUDA_CHECK(cudaMalloc((void**)&X_norm_d,ctx_len * d_model * sizeof(float)));
-    CUDA_CHECK(cudaMalloc((void**)&X_norm2_d,ctx_len * d_model* sizeof(float)));
-    CUDA_CHECK(cudaMalloc((void**)&residual_out_d,ctx_len * d_model * sizeof(float)));
-    CUDA_CHECK(cudaMalloc((void**)&residual2_out_d,ctx_len * d_model* sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&X_norm_d, ctx_len * sizeof *X_norm_d));
+    CUDA_CHECK(cudaMalloc(&X_norm2_d, ctx_len * sizeof *X_norm2_d));
+    CUDA_CHECK(cudaMalloc(&residual_out_d, ctx_len * sizeof *residual_out_d));
+    CUDA_CHECK(cudaMalloc(&residual2_out_d, ctx_len * sizeof *residual2_out_d));
+
+    CUDA_CHECK(cudaMalloc(&Q_d, ctx_len * sizeof *Q_d));
+    CUDA_CHECK(cudaMalloc(&K_cache_d, num_layers * sizeof *K_cache_d));
+    CUDA_CHECK(cudaMalloc(&V_cache_d, num_layers * sizeof *V_cache_d));
     
+    CUDA_CHECK(cudaMalloc(&scores_h_d, ctx_len * sizeof *scores_h_d));
+    CUDA_CHECK(cudaMalloc(&weights_h_d, ctx_len * sizeof *weights_h_d));    
+    CUDA_CHECK(cudaMalloc(&context_d, ctx_len * sizeof *context_d));
+
+    CUDA_CHECK(cudaMalloc(&X1_d, ctx_len * sizeof *X1_d));
+    CUDA_CHECK(cudaMalloc(&X1_out_d, ctx_len * sizeof *X1_out_d));    
+    CUDA_CHECK(cudaMalloc(&X2_d, ctx_len * sizeof *X2_d));
+    CUDA_CHECK(cudaMalloc(&X2_out_d, ctx_len * sizeof *X2_out_d));
+    CUDA_CHECK(cudaMalloc(&Xf_out_d, ctx_len * sizeof *Xf_out_d));
+
+    CUDA_CHECK(cudaMalloc(&final_attention_output_d, ctx_len * sizeof *final_attention_output_d));
+    
+    CUDA_CHECK(cudaMalloc(&context_heads_d, nof_heads* sizeof *context_heads_d));
+    
+    CUDA_CHECK(cudaMalloc(&logits_d, ctx_len * sizeof *logits_d));
+    
+
 }
+
 #endif
 static void allocate_weights_cpu(void){
     size_t allocated_size = 0;
@@ -808,56 +855,43 @@ static void transformer_block(float *input,int n_tokens,int n_new_tokens,
 static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
                         TransformerBlockParams * tbp,json_t *json_root,int layer_id,int token_idx
                         ){
-    char layer_key[32];
-    snprintf(layer_key, sizeof(layer_key), "token_%d_layer_%d", token_idx,layer_id);
-    json_t *layer_obj = json_object();
+    //char layer_key[32];
+    //snprintf(layer_key, sizeof(layer_key), "token_%d_layer_%d", token_idx,layer_id);
+    //json_t *layer_obj = json_object();
     
     // Layer Norm 1
     //printf("--- Layer (Detailed Log) ---\n");
     //printf("Input:\n");
-    
-    layernorm_cuda((float (*)[d_model])input,n_tokens,d_model,tbp->ln1_gamma,tbp->ln1_beta, (float (*)[d_model])&X_norm_d[0][0],eps);
+    int cache_start_index = n_tokens - n_new_tokens;
 
-    print_2d_tensor("LN1 X_norm[1][:10]:",&X_norm[1][0],ctx_len,d_model,1,10,0);
+    layernorm_cuda((float (*)[d_model])(input + cache_start_index*d_model),n_new_tokens,d_model,tbp->ln1_gamma,tbp->ln1_beta, (float (*)[d_model])&X_norm_d[cache_start_index][0],eps);
+
+    //print_2d_tensor("LN1 X_norm[1][:10]:",&X_norm[1][0],ctx_len,d_model,1,10,0);
 
     //int n_new_tokens = n_tokens-last_index;
 
     // QKV
-    if(kv_cache_enabled){
-        
-        int cache_start_index = n_tokens - n_new_tokens;
-
-        dot_2d(&X_norm[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_q,d_model,d_model,d_model,&Q[cache_start_index][0],n_new_tokens, d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-        add_bias_2d(&Q[cache_start_index][0],n_new_tokens,d_model,tbp->b_q,NULL);
-
-        // final destination pointer in the cache
-        float* k_cache_ptr = &K_cache[layer_id][cache_start_index][0];
-        dot_2d(&X_norm[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_k,d_model,d_model,d_model,k_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-        add_bias_2d(k_cache_ptr,n_new_tokens,d_model,tbp->b_k,NULL);
-        //memcpy(&K_cache[layer_id][cache_start_index][0],&K[0][0], n_new_tokens * d_model * sizeof(float));
-
-        float* v_cache_ptr = &V_cache[layer_id][cache_start_index][0];
-        dot_2d(&X_norm[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_v,d_model,d_model,d_model,v_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-        add_bias_2d(v_cache_ptr,n_new_tokens,d_model,tbp->b_v,NULL);
-        //memcpy(&V_cache[layer_id][cache_start_index][0],&V[0][0], n_new_tokens * d_model * sizeof(float));
-
-        last_index = n_tokens;
-
-    } else {
-        dot_2d(&X_norm[0][0],n_tokens,d_model,d_model,tbp->W_q,d_model,d_model,d_model,&Q[0][0],n_tokens, d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-        add_bias_2d(&Q[0][0],n_tokens,d_model,tbp->b_q,NULL);
-
-        dot_2d(&X_norm[0][0],n_tokens,d_model,d_model,tbp->W_k,d_model,d_model,d_model,&K[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-        add_bias_2d(&K[0][0],n_tokens,d_model,tbp->b_k,NULL);
-
-        dot_2d(&X_norm[0][0],n_tokens,d_model,d_model,tbp->W_v,d_model,d_model,d_model,&V[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-        add_bias_2d(&V[0][0],n_tokens,d_model,tbp->b_v,NULL);
-    }
+            
+    
+    dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_q,d_model,d_model,d_model,&Q_d[cache_start_index][0],n_new_tokens, d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+    add_bias_cuda(&Q_d[cache_start_index][0],n_new_tokens,d_model,tbp->b_q,NULL);
+    // final destination pointer in the cache
+    
+    float* k_cache_ptr = &K_cache_d[layer_id][cache_start_index][0];
+    dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_k,d_model,d_model,d_model,k_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+    add_bias_cuda(k_cache_ptr,n_new_tokens,d_model,tbp->b_k,NULL);
+    
+    float* v_cache_ptr = &V_cache_d[layer_id][cache_start_index][0];
+    dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_v,d_model,d_model,d_model,v_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+    add_bias_cuda(v_cache_ptr,n_new_tokens,d_model,tbp->b_v,NULL);
+    
+    last_index = n_tokens;
+ 
     
     //add_tensor_to_layer(layer_obj, "V", &V[0][0], ctx_len, d_model, n_tokens, d_model);
-    print_2d_tensor("C Q[1][:10]:",&Q[1][0],ctx_len,d_model,1,10,0);
-    print_2d_tensor("C K[1][:10]:",&K[1][0],ctx_len,d_model,1,10,0);
-    print_2d_tensor("C V[1][:10]:",&V[1][0],ctx_len,d_model,1,10,0);
+    //print_2d_tensor("C Q[1][:10]:",&Q[1][0],ctx_len,d_model,1,10,0);
+    //print_2d_tensor("C K[1][:10]:",&K[1][0],ctx_len,d_model,1,10,0);
+    //print_2d_tensor("C V[1][:10]:",&V[1][0],ctx_len,d_model,1,10,0);
 
 
     // ** to add here the multi head attention code ***
@@ -868,153 +902,121 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
         float *q_h;
         float *k_h;
         float *v_h;
-        float *context_h_out = &context_heads[h][0][0];
+        float *context_h_out = &context_heads_d[h][0][0];
 
-        if (kv_cache_enabled){
-            k_h = &K_cache[layer_id][0][0]+ h * head_dim;
-            v_h = &V_cache[layer_id][0][0]+ h * head_dim;
-            //context_h_out = &context_heads[h][0][0];
+        k_h = &K_cache_d[layer_id][0][0]+ h * head_dim;
+        v_h = &V_cache_d[layer_id][0][0]+ h * head_dim;            
 
-            if(n_new_tokens == 1){
-                float* q_last_token_h = &Q[n_tokens - 1][0] + h * head_dim;
-                float* scores_last_row = &scores_h[n_tokens - 1][0]; 
-                float* weights_last_row = &weights_h[n_tokens - 1][0];
-                float* context_last_row = context_h_out + (n_tokens - 1) * head_dim;
-
-                 // 1. Calculate scores: Q_last dot K_all -> [1 x head_dim] @ [head_dim x n_tokens] = [1 x n_tokens]
-                dot_2d(q_last_token_h, 1, head_dim, d_model, k_h, n_tokens, head_dim, d_model, scores_last_row, 1, n_tokens, ctx_len, 1, APPLY_ATTENTION_SCALING);
-                
-                // Causal mask is implicit up to n_tokens-1, no need to apply for the last row.
-                // 2. Softmax on the single row of scores
-                softmax_2d(scores_last_row, 1, n_tokens, ctx_len, weights_last_row);
-
-                // 3. Calculate context: Weights_last dot V_all -> [1 x n_tokens] @ [n_tokens x head_dim] = [1 x head_dim]
-                dot_2d(weights_last_row, 1, n_tokens, ctx_len, v_h, n_tokens, head_dim, d_model, context_last_row, 1, head_dim, head_dim, 0, !APPLY_ATTENTION_SCALING);
-
-
-            } else {
-                // prefill
-                q_h = &Q[0][0]+ h * head_dim;
-                dot_2d(q_h,n_tokens,head_dim,d_model,k_h,n_tokens,head_dim,d_model,&scores_h[0][0],n_tokens,n_tokens,ctx_len,1,APPLY_ATTENTION_SCALING);
-                apply_casual_masking(&scores_h[0][0],ctx_len/*n_tokens*/,n_tokens);
-                //print_2d_tensor("C scores_h[1][i] (before Softmax):",&scores_h[1][0],ctx_len,ctx_len,1,10,0);            
-                softmax_2d(&scores_h[0][0], n_tokens,n_tokens,ctx_len, &weights_h[0][0]);        
-                //print_2d_tensor("C weights_h[1][:10]",&weights_h[1][0],ctx_len,ctx_len,1,10,0);
-                dot_2d(&weights_h[0][0],n_tokens,n_tokens,ctx_len,v_h,n_tokens,head_dim,d_model,context_h_out,n_tokens,head_dim,head_dim,0,!APPLY_ATTENTION_SCALING);
-            }
-
-
-        }else{
-            q_h = &Q[0][0]+ h * head_dim;
-            k_h = &K[0][0]+ h * head_dim;
-            v_h = &V[0][0]+ h * head_dim;
-            //context_h_out = &context_heads[h][0][0];
-
-            //Clear scores buffer to avoid stale values
-            memset(scores_h, 0, sizeof(float) * ctx_len * ctx_len);
-
-            dot_2d(q_h,n_tokens,head_dim,d_model,k_h,n_tokens,head_dim,d_model,&scores_h[0][0],n_tokens,n_tokens,ctx_len,1,APPLY_ATTENTION_SCALING);
-            apply_casual_masking(&scores_h[0][0],ctx_len/*n_tokens*/,n_tokens);
+        if(n_new_tokens == 1){
+            float* q_last_token_h = &Q_d[n_tokens - 1][0] + h * head_dim;
+            float* scores_last_row = &scores_h_d[n_tokens - 1][0]; 
+            float* weights_last_row = &weights_h_d[n_tokens - 1][0];
+            float* context_last_row = context_h_out + (n_tokens - 1) * head_dim;
+             // 1. Calculate scores: Q_last dot K_all -> [1 x head_dim] @ [head_dim x n_tokens] = [1 x n_tokens]
+            dot_2d(q_last_token_h, 1, head_dim, d_model, k_h, n_tokens, head_dim, d_model, scores_last_row, 1, n_tokens, ctx_len, 1, APPLY_ATTENTION_SCALING);
+            
+            // Causal mask is implicit up to n_tokens-1, no need to apply for the last row.
+            // 2. Softmax on the single row of scores
+            softmax_cuda(scores_last_row, 1, n_tokens, ctx_len, weights_last_row,1.0f);
+            // 3. Calculate context: Weights_last dot V_all -> [1 x n_tokens] @ [n_tokens x head_dim] = [1 x head_dim]
+            dot_2d(weights_last_row, 1, n_tokens, ctx_len, v_h, n_tokens, head_dim, d_model, context_last_row, 1, head_dim, head_dim, 0, !APPLY_ATTENTION_SCALING);
+        } else {
+            // prefill
+            q_h = &Q_d[0][0]+ h * head_dim;
+            dot_2d(q_h,n_tokens,head_dim,d_model,k_h,n_tokens,head_dim,d_model,&scores_h_d[0][0],n_tokens,n_tokens,ctx_len,1,APPLY_ATTENTION_SCALING);
+            casual_masking_cuda(&scores_h_d[0][0],ctx_len/*n_tokens*/,n_tokens);
             //print_2d_tensor("C scores_h[1][i] (before Softmax):",&scores_h[1][0],ctx_len,ctx_len,1,10,0);            
-            softmax_2d(&scores_h[0][0], n_tokens,n_tokens,ctx_len, &weights_h[0][0]);        
+            softmax_cuda(&scores_h_d[0][0], n_tokens,n_tokens,ctx_len, &weights_h_d[0][0],1.0f);        
             //print_2d_tensor("C weights_h[1][:10]",&weights_h[1][0],ctx_len,ctx_len,1,10,0);
-            dot_2d(&weights_h[0][0],n_tokens,n_tokens,ctx_len,v_h,n_tokens,head_dim,d_model,context_h_out,n_tokens,head_dim,head_dim,0,!APPLY_ATTENTION_SCALING);
-        }                        
+            dot_2d(&weights_h_d[0][0],n_tokens,n_tokens,ctx_len,v_h,n_tokens,head_dim,d_model,context_h_out,n_tokens,head_dim,head_dim,0,!APPLY_ATTENTION_SCALING);
+        }
+                               
     }
 
-    if(kv_cache_enabled && n_new_tokens == 1){
+    if(n_new_tokens == 1){
         // generation phase
-            // index of the new token
-            int i = n_tokens - 1; 
-            // 1. head concat (for the last token only)
-            for (int h = 0; h < nof_heads; h++) {
-                // More efficient to copy the whole head's output for the token at once
-                memcpy(&final_attention_output[i][h * head_dim], &context_heads[h][i][0], head_dim * sizeof(float));
-            }
 
-            // 2. Attention projection (on the last token only)
-            dot_2d(&final_attention_output[i][0],1,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-            
-            // Attn projection bias
-            add_bias_2d(&context[i][0],1,d_model,tbp->attn_proj_bias,NULL);
-            
-            // 3. Residual connection
-            add_2d(input + (i * d_model),1,d_model,&context[i][0],&residual_out[i][0]);            
+        // index of the new token
+        int i = n_tokens - 1; // also cache_start_index
 
-            // 4. Layer Norm 2 (on the last token only)
-            layernorm_2d(&residual_out[i][0],1,d_model,tbp->ln2_gamma,tbp->ln2_beta, &X_norm2[i][0],eps);
-            //layernorm_cuda((float (*)[d_model])input,n_tokens,d_model,tbp->ln2_gamma,tbp->ln1_beta, (float (*)[d_model])&X_norm[0][0],eps);
-
-            
-            // 5. MLP (on the last token only)
-            dot_2d(&X_norm2[i][0],1,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out[i][0],1,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
-            // W1 bias
-            add_bias_2d(&X1_out[i][0],1,d_ff,tbp->b1,NULL);
-            // GELU activation
-            gelu_2d(&X1_out[i][0],d_ff,1,NULL);
-            // W2 
-            dot_2d(&X1_out[i][0],1,d_ff,d_ff,tbp->W2,d_model,d_ff,d_ff,&X2_out[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-            // W2 bias
-            add_bias_2d(&X2_out[i][0],1,d_model,tbp->b2,NULL);
-            
-            // 6. Final Residual Connection (for the last token only)
-            // First, preserve the state of previous tokens by copying them over
-            if (i > 0) {
-                memcpy(&residual2_out[0][0], input, i * d_model * sizeof(float));
-            }
-            // Then, calculate the new residual for the last token
-            add_2d(&residual_out[i][0], 1, d_model, &X2_out[i][0], &residual2_out[i][0]);
-
-        } else {
-            // prefill phase or non cached path
-            for (int i = 0; i < n_tokens; i++) {
-                for (int h = 0; h < nof_heads; h++) {
-                     memcpy(&final_attention_output[i][h * head_dim], &context_heads[h][i][0], head_dim * sizeof(float));
-                }            
-            }
-            // Attention projection 
-        dot_2d(&final_attention_output[0][0],n_tokens,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context[0][0],ctx_len,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-        print_2d_tensor("C context[1][:10](before bias):",&context[1][0],ctx_len,d_model,1,10,0);
+        // 1. head concat (for the last token only)
+        //for (int h = 0; h < nof_heads; h++) {
+            // More efficient to copy the whole head's output for the token at once
+            // ? ? ?
+        concat_heads_cuda(&context_heads_d[0][0][0],&final_attention_output_d[0][0],i,nof_heads,head_dim,ctx_len);
+            //memcpy(&final_attention_output[i][h * head_dim], &context_heads[h][i][0], head_dim * sizeof(float));
+        //}
+        // 2. Attention projection (on the last token only)
+        dot_2d(&final_attention_output_d[i][0],1,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context_d[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
 
         // Attn projection bias
-        add_bias_2d(&context[0][0],n_tokens,d_model,tbp->attn_proj_bias,NULL);
-        print_2d_tensor("C context[1][:10]:",&context[1][0],ctx_len,d_model,1,10,0);
+        add_bias_cuda(&context_d[i][0],1,d_model,tbp->attn_proj_bias,NULL);
 
-        // Residual connection
-        add_2d(input,n_tokens,d_model,&context[0][0],&residual_out[0][0]);
-        print_2d_tensor("C context[1][:10]:",&residual_out[1][0],ctx_len,d_model,1,10,0);
+        // 3. Residual connection
+        add_2d_cuda(input + (i * d_model),1,d_model,&context_d[i][0],&residual_out_d[i][0]);
 
 
-        // Layer Norm 2
-        layernorm_2d(&residual_out[0][0],n_tokens,d_model,tbp->ln2_gamma,tbp->ln2_beta, &X_norm2[0][0],eps);
-        print_2d_tensor("C X_norm2[1][:10]:",&X_norm2[1][0],ctx_len,d_model,1,10,0);
+        // 4. Layer Norm 2 (on the last token only)
+        layernorm_cuda(&residual_out_d[i][0],1,d_model,tbp->ln2_gamma,tbp->ln2_beta, &X_norm2_d[i][0],eps);
 
 
-        // MLP layer, W1
-        dot_2d(&X_norm2[0][0],n_tokens,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out[0][0],n_tokens,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
-        print_2d_tensor("C X1_out[1][:10] before bias:",&X1_out[1][0],ctx_len,d_ff,1,10,0);
-
+        // 5. MLP (on the last token only)
+        dot_2d(&X_norm2_d[i][0],1,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out_d[i][0],1,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
         // W1 bias
-        add_bias_2d(&X1_out[0][0],n_tokens,d_ff,tbp->b1,NULL);
-        print_2d_tensor("C X1_out[1][:10] before bias:",&X1_out[1][0],ctx_len,d_ff,1,10,0);
-
+        add_bias_cuda(&X1_out_d[i][0],1,d_ff,tbp->b1,NULL);
         // GELU activation
-        gelu_2d(&X1_out[0][0],n_tokens,d_ff,NULL);
-        print_2d_tensor("C X1_out after GELU[1][:10]",&X1_out[1][0],ctx_len,d_ff,1,10,0);
-            
-        // W2 
-        dot_2d(&X1_out[0][0],n_tokens,d_ff,d_ff,tbp->W2,d_model,d_ff,d_ff,&X2_out[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-        print_2d_tensor("C X2_out[1][:10] before bias:",&X2_out[1][0],ctx_len,d_model,1,10,0);
-
+        gelu_cuda(&X1_out_d[i][0],d_ff,1,NULL);
+        // W2
+        dot_2d(&X1_out_d[i][0],1,d_ff,d_ff,tbp->W2,d_model,d_ff,d_ff,&X2_out_d[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
         // W2 bias
-        add_bias_2d(&X2_out[0][0],n_tokens,d_model,tbp->b2,NULL);
-        print_2d_tensor("C X2_out[1][:10]:",&X2_out[1][0],ctx_len,d_model,1,10,0);
+        add_bias_cuda(&X2_out_d[i][0],1,d_model,tbp->b2,NULL);
 
-        // Residual connection
-        add_2d(&X2_out[0][0],n_tokens,d_model,&residual_out[0][0],&residual2_out[0][0]);
+        // 6. Final Residual Connection (for the last token only)
+        // First, preserve the state of previous tokens by copying them over
+        if (i > 0) {
+            cudaMemcpy(&residual2_out_d[0][0], input, i * d_model * sizeof(float), cudaMemcpyDeviceToDevice);
+            //memcpy(&residual2_out[0][0], input, i * d_model * sizeof(float));
+        }
+        // Then, calculate the new residual for the last token /////CUDA is missing///
+        //add_2d(&X2_out[0][0],n_tokens,d_model,&residual_out[0][0],&residual2_out[0][0]);
+        add_2d_cuda(&residual_out_d[i][0], 1, d_model, &X2_out_d[i][0], &residual2_out_d[i][0]);
 
-    }                    
-    json_object_set_new(json_root, layer_key, layer_obj);
+    } else {
+        // prefill phase — run the post-attention pipeline for all n_tokens rows
+
+        // 1. head concat for ALL tokens
+        // TODO: replace with a single (token x head x dim) grid kernel for perf
+        for (int t = 0; t < n_tokens; t++) {
+            concat_heads_cuda(&context_heads_d[0][0][0],&final_attention_output_d[0][0],t,nof_heads,head_dim,ctx_len);
+        }
+
+        // 2. Attention projection: [n_tokens x d_model] @ W_proj^T -> context
+        dot_2d(&final_attention_output_d[0][0],n_tokens,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context_d[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+        // Attn projection bias
+        add_bias_cuda(&context_d[0][0],n_tokens,d_model,tbp->attn_proj_bias,NULL);
+
+        // 3. Residual connection
+        add_2d_cuda(input,n_tokens,d_model,&context_d[0][0],&residual_out_d[0][0]);
+
+        // 4. Layer Norm 2
+        layernorm_cuda((float (*)[d_model])&residual_out_d[0][0],n_tokens,d_model,tbp->ln2_gamma,tbp->ln2_beta,(float (*)[d_model])&X_norm2_d[0][0],eps);
+
+        // 5. MLP
+        dot_2d(&X_norm2_d[0][0],n_tokens,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out_d[0][0],n_tokens,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
+        // W1 bias
+        add_bias_cuda(&X1_out_d[0][0],n_tokens,d_ff,tbp->b1,NULL);
+        // GELU activation
+        gelu_cuda(&X1_out_d[0][0],d_ff,n_tokens,NULL);
+        // W2
+        dot_2d(&X1_out_d[0][0],n_tokens,d_ff,d_ff,tbp->W2,d_model,d_ff,d_ff,&X2_out_d[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+        // W2 bias
+        add_bias_cuda(&X2_out_d[0][0],n_tokens,d_model,tbp->b2,NULL);
+
+        // 6. Final Residual Connection (for all tokens)
+        add_2d_cuda(&residual_out_d[0][0],n_tokens,d_model,&X2_out_d[0][0],&residual2_out_d[0][0]);
+    }
+    
+    //json_object_set_new(json_root, layer_key, layer_obj);
                         
 }
 #endif
@@ -1419,7 +1421,7 @@ int main(int argc, char *argv[])
     init_layer_table();
     printf("after layer table init\n");
 
-    update_layer_table();
+    //update_layer_table();
 #ifdef USE_CUDA
     
     print_gpu_memory_usage();
@@ -1432,6 +1434,7 @@ int main(int argc, char *argv[])
     load_all_weights(fp);
     fclose(fp);
 
+    update_layer_table();
     printf("load weights...");
 #ifdef USE_CUDA
     print_gpu_memory_usage();
@@ -1440,9 +1443,12 @@ int main(int argc, char *argv[])
 
     json_t *json_root = json_object();
     json_t *perf_root   = json_object();  // top level
-    json_t *chunk_array = json_array();   // per chunk entries 
+    json_t *chunk_array = json_array();   // per chunk entries
+    json_t *tpot_array  = json_array();   // per-token latencies
     int current_seq_len_initial = 0;
     float total_inference_elapsed = 0;
+    struct timespec token_start, token_end;
+    double ttft = 0.0;
     json_object_set_new(perf_root, "model_variant",  json_string(MODEL));
     json_object_set_new(perf_root, "kv_cache_enabled", json_integer(kv_cache_enabled)); 
 
@@ -1462,7 +1468,7 @@ int main(int argc, char *argv[])
     CUDA_CHECK(cudaMemcpy(wte_T_d, wte_T, d_model * sizeof(*wte_T_d), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaDeviceSynchronize());
     print_gpu_memory_usage();
-    return 1;
+    //return 1;
 #endif
 
     float temperature = 1.0;
@@ -1555,23 +1561,31 @@ int main(int argc, char *argv[])
         printf("--- Total Time for Single Forward Pass (O(N^2) Measurement) ---\n");
         printf("Context Length | Total Pass Time (s)\n");
         printf("------------------------------------\n");
+         
+        int last_index = 0;
 
-        for (int ii = 0; ii < requested_out_tokens; ii++){  
-            
+        for (int ii = 0; ii < requested_out_tokens; ii++){
+            clock_gettime(CLOCK_MONOTONIC, &token_start);
+
+            // calculate n_new_tokens BEFORE updating last_index
+            int n_new_tokens = current_seq_len - last_index;
+
 #ifdef USE_CUDA
-            CUDA_CHECK(cudaMemcpy(tokens_d,tokens,current_seq_len*sizeof(int),cudaMemcpyHostToDevice));            
-            CUDA_CHECK(cudaDeviceSynchronize());
-            embeddings_cuda(wte_d,wpe_d,tokens_d,embeddings_d,current_seq_len);
-#else // CPU
-            for (int i=0; i<current_seq_len;i++){
+            // Only copy the new tokens to GPU
+            CUDA_CHECK(cudaMemcpy(&tokens_d[last_index],&tokens[last_index],n_new_tokens*sizeof(int),cudaMemcpyHostToDevice));
+            // Only compute embeddings for the new tokens
+            embeddings_cuda(wte_d,wpe_d,tokens_d,embeddings_d,last_index,n_new_tokens);
+#else
+            for (int i=last_index; i<current_seq_len;i++){
                 for (int j=0; j<d_model;j++){
-                    // can optimize here
                     embeddings[i][j] = wte[tokens[i]][j] + wpe[i][j];
                 }
             }
 #endif
-            // calculate n_new_tokens once before iterating through layers
-            int n_new_tokens = current_seq_len - last_index;
+
+#ifdef USE_CUDA
+            float *current_hidden_state_d = &embeddings_d[0][0];
+#endif
 
             // reset file pointer position to load weights from the right position
             //fseek(fp, offset, SEEK_SET);
@@ -1582,18 +1596,18 @@ int main(int argc, char *argv[])
                 //printf("nof_tokens=%d\n",n_tokens);
                 #ifdef USE_CUDA 
                 //TODO: use one pointer here (set it before to the right address)
-                    transformer_block(&embeddings_d[0][0],current_seq_len,n_new_tokens, &layer[i],json_root,i,ii);
+                    transformer_block(current_hidden_state_d,current_seq_len,n_new_tokens, &layer[i],json_root,i,ii);
+                    current_hidden_state_d = &residual2_out_d[0][0];
                 #else
                     transformer_block(&embeddings[0][0],current_seq_len,n_new_tokens, &layer[i],json_root,i,ii);
-                #endif
 
-                
-                
-                // Zero out entire embeddings buffer (safe reset)
-                memset(&embeddings[0][0], 0, sizeof(float) * ctx_len * d_model);
-                // use the output from this block as the input to the next block
-                memcpy(&embeddings[0][0], &residual2_out[0][0], sizeof(float) * current_seq_len * d_model);
-                //printf("*****Layer %d completed******\n",i);
+                    if (i < num_layers-1){
+                        memcpy(&embeddings[0][0], &residual2_out[0][0], sizeof(float) * current_seq_len * d_model);
+                    }
+                                                            
+                    //printf("*****Layer %d completed******\n",i);
+
+                #endif                                                
 
             }
             //printf("transformer loop done\n");
@@ -1606,6 +1620,21 @@ int main(int argc, char *argv[])
             //fread_or_exit(layer_normf_beta, sizeof(float), d_model, fp);
             
 
+#ifdef USE_CUDA 
+            //print_2d_tensor("C residual2_out[1][:10]:",&residual2_out[1][0],ctx_len,d_model,1,10,0);
+
+            // Layer Norm final (only the last token needed for next-token prediction)
+            {
+                int ln_start = last_token_position;
+                int ln_rows = 1;
+                layernorm_cuda((float (*)[d_model])&residual2_out_d[ln_start][0],ln_rows,d_model,&layer_normf_gamma_d[0],&layer_normf_beta_d[0],(float (*)[d_model])&Xf_out_d[ln_start][0],eps);
+
+                // get logits (only for the last token)
+                dot_2d(&Xf_out_d[ln_start][0],ln_rows,d_model,d_model,&wte_T_d[0][0],d_model,vocab_size,vocab_size,&logits_d[ln_start][0],ln_rows,vocab_size,vocab_size,0,!APPLY_ATTENTION_SCALING);
+            }
+            //print_2d_tensor("C logits[1][i]",&logits[1][0],ctx_len,vocab_size,1,10,0);
+
+#else
             print_2d_tensor("C residual2_out[1][:10]:",&residual2_out[1][0],ctx_len,d_model,1,10,0);
 
             // Layer Norm final
@@ -1615,8 +1644,21 @@ int main(int argc, char *argv[])
             // get logits
             dot_2d(&Xf_out[0][0],current_seq_len,d_model,d_model,&wte_T[0][0],d_model,vocab_size,vocab_size,&logits[0][0],current_seq_len,vocab_size,vocab_size,0,!APPLY_ATTENTION_SCALING);
             print_2d_tensor("C logits[1][i]",&logits[1][0],ctx_len,vocab_size,1,10,0);
+#endif
+            
+            // Compute probabilities
+            float probs[vocab_size];
 
+#ifdef USE_CUDA 
+            float * logit_row_d = &logits_d[last_token_position][0];
+            softmax_cuda(logit_row_d,1,vocab_size,vocab_size,logit_row_d,1.0f);
+            
+            CUDA_CHECK(cudaMemcpy(probs, logit_row_d, vocab_size*sizeof(float), cudaMemcpyDeviceToHost));
 
+            
+            // allocate a buffer for the logic to copy from the gpu. 
+
+#else
             //===========================================SOFTMAX START===================================//
             // --- Search the top 5 ---
             float *logit_row = &logits[last_token_position][0];
@@ -1628,8 +1670,7 @@ int main(int argc, char *argv[])
                 if (val > max_logit) max_logit = val;
             }
 
-            // Compute probabilities
-            float probs[vocab_size];
+            
             float sum = 0.0;
             for (int i = 0; i < vocab_size; i++) {
                 float val = (logit_row[i] / temperature) - max_logit;
@@ -1642,22 +1683,8 @@ int main(int argc, char *argv[])
                 probs[i] /= sum;
             }
             //printf("softmax done");
-            //===========================================SOFTMAX END===================================//
+    #endif
 
-            //===========================================MULTINOMIAL Sampling START===================================//
-            // Sample from probability distribution
-            //float r = (float)rand() / RAND_MAX;
-            //float cumulative = 0.0;
-            //int sampled_token = -1;
-            //for (int i = 0; i < vocab_size; i++) {
-            //    cumulative += probs[i];
-            //    if (r < cumulative) {
-            //        sampled_token = i;
-            //        break;
-            //    }
-            //}
-            //===========================================MULTINOMIAL Sampling END===================================//
-            
             // --- Apply Top-K Sampling ---
             int top_k_val = 40; // Choose your desired K value (e.g., 40, 50, 100)
             // Ensure these arrays are large enough to hold 'top_k_val' elements
@@ -1690,6 +1717,24 @@ int main(int argc, char *argv[])
             tokens[current_seq_len++] = sampled_token;
             last_token_position = current_seq_len -1;
             //printf("%d ",sampled_token);
+
+            // --- Per-token timing ---
+            clock_gettime(CLOCK_MONOTONIC, &token_end);
+            double token_elapsed = (token_end.tv_sec - token_start.tv_sec) + (token_end.tv_nsec - token_start.tv_nsec) / 1e9;
+
+            if (ii == 0) {
+                // TTFT: time from inference start to first token produced
+                ttft = (token_end.tv_sec - start.tv_sec) + (token_end.tv_nsec - start.tv_nsec) / 1e9;
+            }
+
+            // Log per-token latency with context length
+            {
+                json_t *tok_obj = json_object();
+                json_object_set_new(tok_obj, "token_index", json_integer(ii));
+                json_object_set_new(tok_obj, "context_len", json_integer(current_seq_len));
+                json_object_set_new(tok_obj, "latency_s",   json_real(token_elapsed));
+                json_array_append_new(tpot_array, tok_obj);
+            }
 
             // --- Time Measurement and Logging per Chunk ---
             if (((ii + 1) % token_chunk_size == 0) || ((ii + 1) == requested_out_tokens)) {
@@ -1753,6 +1798,16 @@ int main(int argc, char *argv[])
 
     
     json_object_set_new(perf_root, "total_seconds", json_real(total_inference_elapsed));
+
+    // --- Standard LLM inference metrics ---
+    json_object_set_new(perf_root, "ttft_s", json_real(ttft));
+    double decode_time = total_inference_elapsed - ttft;
+    double mean_tpot = (requested_out_tokens > 1) ? decode_time / (requested_out_tokens - 1) : 0.0;
+    double tps = (total_inference_elapsed > 0) ? requested_out_tokens / total_inference_elapsed : 0.0;
+    json_object_set_new(perf_root, "mean_tpot_s", json_real(mean_tpot));
+    json_object_set_new(perf_root, "output_tps", json_real(tps));
+    json_object_set_new(perf_root, "e2e_latency_s", json_real(total_inference_elapsed));
+    json_object_set_new(perf_root, "per_token_latencies", tpot_array);
 
     
     const char * filename_to_open;
