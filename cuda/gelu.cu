@@ -39,10 +39,4 @@ extern "C" void gelu_cuda(float *in, int cols, int rows, float *out){
                 cudaGetErrorString(err), rows, cols);
         abort();
     }
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "FATAL gelu_cuda sync: %s (rows=%d cols=%d)\n",
-                cudaGetErrorString(err), rows, cols);
-        abort();
-    }
 }

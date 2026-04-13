@@ -277,20 +277,6 @@ static void dot_2d_gpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b
     // NOTE: Assumes 'a', 'b', and 'c_out' are pointers to GPU memory.
     cublasHandle_t handle = get_cublas_handle();
 
-    // Surface any pre-existing sticky CUDA error from a previous kernel,
-    // so we don't blame cuBLAS for someone else's fault.
-    {
-        cudaError_t pre = cudaDeviceSynchronize();
-        if (pre != cudaSuccess) {
-            fprintf(stderr,
-                "FATAL: pre-existing CUDA error before cublasSgemm: %s\n"
-                "  dims: a[%d x %d] lda=%d  b[%d x %d] ldb=%d  c[%d x %d] ldc=%d  trans_b=%d\n",
-                cudaGetErrorString(pre),
-                a_r, a_c, lda, b_r, b_c, ldb, c_r, c_c, ldc, transpose_b);
-            abort();
-        }
-    }
-
     float alpha = 1.0f;
     if (apply_attention_scaling) {
         alpha = 1.0f / sqrtf((float)a_c);
@@ -301,13 +287,8 @@ static void dot_2d_gpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b
     const int K = a_c;
     const int N = transpose_b ? b_r : b_c;
 
-
     const cublasOperation_t opB = transpose_b ? CUBLAS_OP_T : CUBLAS_OP_N;
     const cublasOperation_t opA = CUBLAS_OP_N;
-
-    // Row-Major to Column-Major trick for cuBLAS
-    //const cublasOperation_t opB = transpose_b ? CUBLAS_OP_N : CUBLAS_OP_T;
-    //const cublasOperation_t opA = CUBLAS_OP_T;
 
     cublasStatus_t stat = cublasSgemm(handle, opB, opA, N, M, K, &alpha,
                                       b, ldb, a, lda, &beta, c_out, ldc);
@@ -319,20 +300,6 @@ static void dot_2d_gpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b
             "  cublas: M=%d N=%d K=%d\n",
             stat, a_r, a_c, lda, b_r, b_c, ldb, c_r, c_c, ldc, transpose_b, M, N, K);
         abort();
-    }
-
-    // Force a sync so any execution failure from THIS sgemm is attributed here
-    // (and not to whatever comes next).
-    {
-        cudaError_t post = cudaDeviceSynchronize();
-        if (post != cudaSuccess) {
-            fprintf(stderr,
-                "FATAL: cudaDeviceSynchronize after cublasSgemm failed: %s\n"
-                "  dims: a[%d x %d] lda=%d  b[%d x %d] ldb=%d  c[%d x %d] ldc=%d  trans_b=%d\n",
-                cudaGetErrorString(post),
-                a_r, a_c, lda, b_r, b_c, ldb, c_r, c_c, ldc, transpose_b);
-            abort();
-        }
     }
 }
 
@@ -526,6 +493,7 @@ struct timespec start,end;
 
 
 #ifdef ENABLE_KV_CACHE
+
 int kv_cache_enabled = 1;
 #else
 int kv_cache_enabled = 0;
@@ -894,8 +862,9 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
     // Layer Norm 1
     //printf("--- Layer (Detailed Log) ---\n");
     //printf("Input:\n");
-    
-    layernorm_cuda((float (*)[d_model])input,n_tokens,d_model,tbp->ln1_gamma,tbp->ln1_beta, (float (*)[d_model])&X_norm_d[0][0],eps);
+    int cache_start_index = n_tokens - n_new_tokens;
+
+    layernorm_cuda((float (*)[d_model])(input + cache_start_index*d_model),n_new_tokens,d_model,tbp->ln1_gamma,tbp->ln1_beta, (float (*)[d_model])&X_norm_d[cache_start_index][0],eps);
 
     //print_2d_tensor("LN1 X_norm[1][:10]:",&X_norm[1][0],ctx_len,d_model,1,10,0);
 
@@ -903,7 +872,7 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
 
     // QKV
             
-    int cache_start_index = n_tokens - n_new_tokens;
+    
     dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_q,d_model,d_model,d_model,&Q_d[cache_start_index][0],n_new_tokens, d_model,d_model,1,!APPLY_ATTENTION_SCALING);
     add_bias_cuda(&Q_d[cache_start_index][0],n_new_tokens,d_model,tbp->b_q,NULL);
     // final destination pointer in the cache
@@ -1474,9 +1443,12 @@ int main(int argc, char *argv[])
 
     json_t *json_root = json_object();
     json_t *perf_root   = json_object();  // top level
-    json_t *chunk_array = json_array();   // per chunk entries 
+    json_t *chunk_array = json_array();   // per chunk entries
+    json_t *tpot_array  = json_array();   // per-token latencies
     int current_seq_len_initial = 0;
     float total_inference_elapsed = 0;
+    struct timespec token_start, token_end;
+    double ttft = 0.0;
     json_object_set_new(perf_root, "model_variant",  json_string(MODEL));
     json_object_set_new(perf_root, "kv_cache_enabled", json_integer(kv_cache_enabled)); 
 
@@ -1590,31 +1562,26 @@ int main(int argc, char *argv[])
         printf("Context Length | Total Pass Time (s)\n");
         printf("------------------------------------\n");
          
+        int last_index = 0;
 
-        for (int ii = 0; ii < requested_out_tokens; ii++){  
-            
+        for (int ii = 0; ii < requested_out_tokens; ii++){
+            clock_gettime(CLOCK_MONOTONIC, &token_start);
+
+            // calculate n_new_tokens BEFORE updating last_index
+            int n_new_tokens = current_seq_len - last_index;
+
 #ifdef USE_CUDA
-            //fprintf(stderr, "[dbg] ii=%d current_seq_len=%d tokens:", ii, current_seq_len);
-            //for (int _i = 0; _i < current_seq_len; _i++) {
-            //    fprintf(stderr, " %d", tokens[_i]);
-            //    if (tokens[_i] < 0 || tokens[_i] >= vocab_size) {
-            //        fprintf(stderr, "<OOB>");
-            //    }
-            //}
-            //fprintf(stderr, "\n");
-            CUDA_CHECK(cudaMemcpy(tokens_d,tokens,current_seq_len*sizeof(int),cudaMemcpyHostToDevice));
-            CUDA_CHECK(cudaDeviceSynchronize());
-            embeddings_cuda(wte_d,wpe_d,tokens_d,embeddings_d,current_seq_len);
-#else // CPU
-            for (int i=0; i<current_seq_len;i++){
+            // Only copy the new tokens to GPU
+            CUDA_CHECK(cudaMemcpy(&tokens_d[last_index],&tokens[last_index],n_new_tokens*sizeof(int),cudaMemcpyHostToDevice));
+            // Only compute embeddings for the new tokens
+            embeddings_cuda(wte_d,wpe_d,tokens_d,embeddings_d,last_index,n_new_tokens);
+#else
+            for (int i=last_index; i<current_seq_len;i++){
                 for (int j=0; j<d_model;j++){
-                    // can optimize here
                     embeddings[i][j] = wte[tokens[i]][j] + wpe[i][j];
                 }
             }
 #endif
-            // calculate n_new_tokens once before iterating through layers
-            int n_new_tokens = current_seq_len - last_index;
 
 #ifdef USE_CUDA
             float *current_hidden_state_d = &embeddings_d[0][0];
@@ -1640,11 +1607,7 @@ int main(int argc, char *argv[])
                                                             
                     //printf("*****Layer %d completed******\n",i);
 
-                #endif
-
-                
-                
-                
+                #endif                                                
 
             }
             //printf("transformer loop done\n");
@@ -1660,12 +1623,15 @@ int main(int argc, char *argv[])
 #ifdef USE_CUDA 
             //print_2d_tensor("C residual2_out[1][:10]:",&residual2_out[1][0],ctx_len,d_model,1,10,0);
 
-            // Layer Norm final
-            layernorm_cuda(&residual2_out_d[0][0],current_seq_len,d_model,&layer_normf_gamma_d[0],&layer_normf_beta_d[0],&Xf_out_d[0][0],eps);
-            //print_2d_tensor("C Xf_out[1][:10]:",&Xf_out[1][0],ctx_len,d_model,1,10,0);
+            // Layer Norm final (only the last token needed for next-token prediction)
+            {
+                int ln_start = last_token_position;
+                int ln_rows = 1;
+                layernorm_cuda((float (*)[d_model])&residual2_out_d[ln_start][0],ln_rows,d_model,&layer_normf_gamma_d[0],&layer_normf_beta_d[0],(float (*)[d_model])&Xf_out_d[ln_start][0],eps);
 
-            // get logits
-            dot_2d(&Xf_out_d[0][0],current_seq_len,d_model,d_model,&wte_T_d[0][0],d_model,vocab_size,vocab_size,&logits_d[0][0],current_seq_len,vocab_size,vocab_size,0,!APPLY_ATTENTION_SCALING);
+                // get logits (only for the last token)
+                dot_2d(&Xf_out_d[ln_start][0],ln_rows,d_model,d_model,&wte_T_d[0][0],d_model,vocab_size,vocab_size,&logits_d[ln_start][0],ln_rows,vocab_size,vocab_size,0,!APPLY_ATTENTION_SCALING);
+            }
             //print_2d_tensor("C logits[1][i]",&logits[1][0],ctx_len,vocab_size,1,10,0);
 
 #else
@@ -1718,26 +1684,7 @@ int main(int argc, char *argv[])
             }
             //printf("softmax done");
     #endif
-            //===========================================SOFTMAX END===================================//
 
-            //===========================================MULTINOMIAL Sampling START===================================//
-            // Sample from probability distribution
-            //float r = (float)rand() / RAND_MAX;
-            //float cumulative = 0.0;
-            //int sampled_token = -1;
-            //for (int i = 0; i < vocab_size; i++) {
-            //    cumulative += probs[i];
-            //    if (r < cumulative) {
-            //        sampled_token = i;
-            //        break;
-            //    }
-            //}
-            //===========================================MULTINOMIAL Sampling END===================================//
-#ifdef USE_CUDA 
-            // copy here to probs[], and continue calc on the cpu
-#else
-
-#endif
             // --- Apply Top-K Sampling ---
             int top_k_val = 40; // Choose your desired K value (e.g., 40, 50, 100)
             // Ensure these arrays are large enough to hold 'top_k_val' elements
@@ -1770,6 +1717,24 @@ int main(int argc, char *argv[])
             tokens[current_seq_len++] = sampled_token;
             last_token_position = current_seq_len -1;
             //printf("%d ",sampled_token);
+
+            // --- Per-token timing ---
+            clock_gettime(CLOCK_MONOTONIC, &token_end);
+            double token_elapsed = (token_end.tv_sec - token_start.tv_sec) + (token_end.tv_nsec - token_start.tv_nsec) / 1e9;
+
+            if (ii == 0) {
+                // TTFT: time from inference start to first token produced
+                ttft = (token_end.tv_sec - start.tv_sec) + (token_end.tv_nsec - start.tv_nsec) / 1e9;
+            }
+
+            // Log per-token latency with context length
+            {
+                json_t *tok_obj = json_object();
+                json_object_set_new(tok_obj, "token_index", json_integer(ii));
+                json_object_set_new(tok_obj, "context_len", json_integer(current_seq_len));
+                json_object_set_new(tok_obj, "latency_s",   json_real(token_elapsed));
+                json_array_append_new(tpot_array, tok_obj);
+            }
 
             // --- Time Measurement and Logging per Chunk ---
             if (((ii + 1) % token_chunk_size == 0) || ((ii + 1) == requested_out_tokens)) {
@@ -1833,6 +1798,16 @@ int main(int argc, char *argv[])
 
     
     json_object_set_new(perf_root, "total_seconds", json_real(total_inference_elapsed));
+
+    // --- Standard LLM inference metrics ---
+    json_object_set_new(perf_root, "ttft_s", json_real(ttft));
+    double decode_time = total_inference_elapsed - ttft;
+    double mean_tpot = (requested_out_tokens > 1) ? decode_time / (requested_out_tokens - 1) : 0.0;
+    double tps = (total_inference_elapsed > 0) ? requested_out_tokens / total_inference_elapsed : 0.0;
+    json_object_set_new(perf_root, "mean_tpot_s", json_real(mean_tpot));
+    json_object_set_new(perf_root, "output_tps", json_real(tps));
+    json_object_set_new(perf_root, "e2e_latency_s", json_real(total_inference_elapsed));
+    json_object_set_new(perf_root, "per_token_latencies", tpot_array);
 
     
     const char * filename_to_open;

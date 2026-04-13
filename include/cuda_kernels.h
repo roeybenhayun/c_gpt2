@@ -10,7 +10,8 @@ void embeddings_cuda(float (*wte_d)[d_model],
                           float (*wpe_d)[d_model],
                           int *token_d,
                           float (*embeddings_d)[d_model],
-                          int token_length);
+                          int start_row,
+                          int n_rows);
                           
 
 void layernorm_cuda(float (*input)[d_model],

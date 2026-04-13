@@ -46,10 +46,4 @@ extern "C" void add_2d_cuda(float *a, int a_r, int a_c, float *b, float *out)
                 cudaGetErrorString(err), a_r, a_c);
         abort();
     }
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "FATAL add_2d_cuda sync: %s (a_r=%d a_c=%d)\n",
-                cudaGetErrorString(err), a_r, a_c);
-        abort();
-    }
 }

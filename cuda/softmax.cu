@@ -3,56 +3,77 @@
 #include <cuda_runtime.h>
 #include "../include/cuda_kernels.h"
 
-__global__ void softmax_kernel(float *in, float *out, int rows, int cols, int stride,float temperature) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x; 
-    
-    if (i < rows) {
-        float inv_temp = 1.0f / temperature;
-        float *row_ptr = in + i * stride;
-        float *out_ptr = out + i * stride;
+#define THREADS_PER_BLOCK 256
 
-        // 1. Find Max
-        float row_max = -INFINITY;
-        for (int j = 0; j < cols; j++) {
-            float val = row_ptr[j] * inv_temp;
-            if (val > row_max) row_max = val;
-        }
+// One block per row — threads cooperate via shared memory reduction
+__global__ void softmax_kernel(float *in, float *out, int rows, int cols, int stride, float temperature) {
+    __shared__ float s_data[THREADS_PER_BLOCK];
 
-        // 2. Sum Exponentials
-        float sum_exp = 0.0f;
-        for (int j = 0; j < cols; j++) {
-            float val = (row_ptr[j] * inv_temp) - row_max;
-            float e = expf(val);
-            out_ptr[j] = e;
-            sum_exp += e;
-        }
+    int tid = threadIdx.x;
+    int row_idx = blockIdx.x;
 
-        // 3. Normalize
-        for (int j = 0; j < cols; j++) {
-            out_ptr[j] /= sum_exp;
+    if (row_idx >= rows) return;
+
+    float inv_temp = 1.0f / temperature;
+    float *row_ptr = in + row_idx * stride;
+    float *out_ptr = out + row_idx * stride;
+
+    // --- PHASE 1: Find max (parallel reduction) ---
+    float local_max = -INFINITY;
+    for (int j = tid; j < cols; j += blockDim.x) {
+        float val = row_ptr[j] * inv_temp;
+        if (val > local_max) local_max = val;
+    }
+    s_data[tid] = local_max;
+    __syncthreads();
+
+    // Tree reduction for max
+    for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            if (s_data[tid + s] > s_data[tid])
+                s_data[tid] = s_data[tid + s];
         }
+        __syncthreads();
+    }
+    float row_max = s_data[0];
+    __syncthreads();
+
+    // --- PHASE 2: Sum exponentials (parallel reduction) ---
+    float local_sum = 0.0f;
+    for (int j = tid; j < cols; j += blockDim.x) {
+        float e = expf(row_ptr[j] * inv_temp - row_max);
+        out_ptr[j] = e;
+        local_sum += e;
+    }
+    s_data[tid] = local_sum;
+    __syncthreads();
+
+    // Tree reduction for sum
+    for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            s_data[tid] += s_data[tid + s];
+        }
+        __syncthreads();
+    }
+    float sum_exp = s_data[0];
+    __syncthreads();
+
+    // --- PHASE 3: Normalize ---
+    float inv_sum = 1.0f / sum_exp;
+    for (int j = tid; j < cols; j += blockDim.x) {
+        out_ptr[j] *= inv_sum;
     }
 }
 
-extern "C" void softmax_cuda(float *a, int a_r, int a_c, int stride, float *c_out,float temperature) {
-    // Use 1D block. 256 is a standard choice.
-    dim3 threadsPerBlock(256, 1, 1);
-    
-    // Calculate blocks needed based on the actual number of rows (a_r)
-    dim3 numBlocks((a_r + threadsPerBlock.x - 1) / threadsPerBlock.x, 1, 1);
+extern "C" void softmax_cuda(float *a, int a_r, int a_c, int stride, float *c_out, float temperature) {
+    dim3 threadsPerBlock(THREADS_PER_BLOCK, 1, 1);
+    dim3 numBlocks(a_r, 1, 1);
 
-    // Launch Kernel
-    softmax_kernel<<<numBlocks, threadsPerBlock>>>(a, c_out, a_r, a_c, stride,temperature);
+    softmax_kernel<<<numBlocks, threadsPerBlock>>>(a, c_out, a_r, a_c, stride, temperature);
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         fprintf(stderr, "FATAL softmax_cuda launch: %s (a_r=%d a_c=%d stride=%d)\n",
-                cudaGetErrorString(err), a_r, a_c, stride);
-        abort();
-    }
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "FATAL softmax_cuda sync: %s (a_r=%d a_c=%d stride=%d)\n",
                 cudaGetErrorString(err), a_r, a_c, stride);
         abort();
     }

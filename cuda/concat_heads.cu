@@ -48,10 +48,4 @@ extern "C" void concat_heads_cuda(float *src, float *dest, int token_index, int 
                 cudaGetErrorString(err), token_index, _nof_heads, _head_dim, _ctx_len);
         abort();
     }
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "FATAL concat_heads_cuda sync: %s (token_index=%d nof_heads=%d head_dim=%d ctx_len=%d)\n",
-                cudaGetErrorString(err), token_index, _nof_heads, _head_dim, _ctx_len);
-        abort();
-    }
 }

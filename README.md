@@ -164,6 +164,29 @@ Build all targets
 make CPPFLAGS="-DENABLE_KV_CACHE"
 ```
 
+### GPU Build (CUDA + cuBLAS)
+Requires NVIDIA GPU with CUDA toolkit installed. Builds with KV cache enabled by default.
+
+Build GPU GPT-2 Small:
+```bash
+make gpu small
+```
+
+Build GPU GPT-2 Medium:
+```bash
+make gpu medium
+```
+
+Build GPU GPT-2 Large:
+```bash
+make gpu large
+```
+
+Build all GPU targets:
+```bash
+make gpu
+```
+
 ### Cleaning
 To remove all compiled binaries from the project directory:
 
@@ -195,29 +218,67 @@ Interactive mode:
 ```
 
 
-## Running Performence Tests
-To run for all the models
+## Running Performance Tests
+
+Run all models (CPU + GPU):
 ```bash
 ./scripts/run.sh
 ```
 
-To run on a specific model (small,medium or large)
+Run a specific model:
 ```bash
 ./scripts/run.sh small
 ```
 
-Analyse the results
+Run GPU only:
+```bash
+./scripts/run.sh --gpu
+```
+
+Run CPU only:
+```bash
+./scripts/run.sh --cpu
+```
+
+Run GPU with NVIDIA Nsight Systems profiling:
+```bash
+./scripts/run.sh --gpu --profile small
+```
+
+Flags can be combined with model sizes:
+```bash
+./scripts/run.sh --gpu small medium
+```
+
+### Analysing Results
+
+Analyse all results (CPU + GPU):
 ```bash
 python scripts/performance_analysis.py
+```
+
+Analyse GPU-only results:
+```bash
+python scripts/performance_analysis.py --gpu
+```
+
+Analyse CPU-only results:
+```bash
+python scripts/performance_analysis.py --cpu
 ```
 
 
 📁 Directory Structure (Relevant Parts)
 ```bash
 .
-├── out/                            # Compiled C binaries
-├── logs/                           # JSON logs
-├── scripts/                        # Various scripts (i.e automation, performance analysis)
+├── out/                            # Compiled binaries
+│   ├── small/                      # CUDA object files (small model)
+│   ├── medium/                     # CUDA object files (medium model)
+│   └── large/                      # CUDA object files (large model)
+├── cuda/                           # CUDA kernel source files
+├── include/                        # Header files (cuda_kernels.h, model_config.h)
+├── logs/                           # JSON logs and nsys profile reports
+├── scripts/                        # Automation and performance analysis
 ├── tokenizer.py                    # Tokenizer server
 ├── extract_weights.py              # Script to extract weights from Hugging Face models
 ├── transformers/
@@ -229,7 +290,7 @@ python scripts/performance_analysis.py
 ├── Makefile
 ├── requirements.txt                # Python modules
 ├── train_gpt2.py                   # Python GPT2 inference impl.
-├── weights                         # Models weights 
-├── install_dependencies            # (Ubuntu 24.04 only)
+├── weights/                        # Model weights
+├── install_dependencies.sh         # (Ubuntu 24.04 only)
 └── README.md
 ```

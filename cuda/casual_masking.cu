@@ -40,10 +40,4 @@ extern "C" void casual_masking_cuda(float *in,
                 cudaGetErrorString(err), stride, tokens);
         abort();
     }
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "FATAL casual_masking_cuda sync: %s (stride=%d tokens=%d)\n",
-                cudaGetErrorString(err), stride, tokens);
-        abort();
-    }
 }

@@ -93,8 +93,8 @@ extern "C" void layernorm_cuda(float (*input)[d_model],int n_tokens,int d_model_
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        printf("Kernel Launch Error (layernorm): %s\n", cudaGetErrorString(err));
+        fprintf(stderr, "FATAL layernorm_cuda launch: %s (n_tokens=%d)\n",
+                cudaGetErrorString(err), n_tokens);
+        abort();
     }
-
-    cudaDeviceSynchronize();
 }
