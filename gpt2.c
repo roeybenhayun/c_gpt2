@@ -1837,6 +1837,12 @@ int main(int argc, char *argv[])
         }
     }//main loop
 
+    if (!cli_input) {
+        // Interactive mode — no performance log needed
+        json_decref(perf_root);
+        return 0;
+    }
+
     /* initial prompt length (already known) */
     json_object_set_new(perf_root, "initial_prompt_len", json_integer(current_seq_len_initial)); // capture this earlier
     /* Max output length*/
