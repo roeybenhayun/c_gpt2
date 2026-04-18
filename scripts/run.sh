@@ -62,10 +62,12 @@ run_models() {
         echo "Running $model ($tag)..."
         echo "Outputting to $output_file"
 
-        local CMD="./out/$model --prompt \"$INPUT_TEXT\" \
+        local bin_dir="./out/${mode}"
+        local CMD="./${bin_dir}/$model --prompt \"$INPUT_TEXT\" \
                     --req_out_tokens \"$OUT_TOKENS\" \
                     --token_chunk_size \"$CHUNK_SIZE\" \
-                    --json_out_file \"$output_file\""
+                    --json_out_file \"$output_file\" \
+                    --no-stream --verbose"
 
         if $PROFILE && [ "$mode" = "gpu" ]; then
             local nsys_out="${OUTPUT_DIR}/${model}_${tag}_profile_${TIMESTAMP}"
@@ -84,7 +86,6 @@ if $RUN_CPU; then
     echo "========================================="
     echo "  Building CPU binaries"
     echo "========================================="
-    make clean
     make "${MODELS[@]}"
     if [ $? -ne 0 ]; then
         echo "CPU build failed!"
@@ -102,7 +103,6 @@ if $RUN_GPU; then
     echo "========================================="
     echo "  Building GPU binaries"
     echo "========================================="
-    make clean
     make gpu "${MODELS[@]}"
     if [ $? -ne 0 ]; then
         echo "GPU build failed!"

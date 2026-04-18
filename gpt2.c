@@ -777,7 +777,7 @@ static void allocate_weights_cpu(void){
 
 
     // Small 340M, Medium 1.2G, Large 2.8G
-    printf("Total allocated memory = %zu\n",allocated_size);
+    //printf("Total allocated memory = %zu\n",allocated_size);
                                 
     if (!W_q || !W_k) { perror("malloc"); exit(1); }
     
@@ -1349,7 +1349,7 @@ static void load_all_weights(FILE* fp){
     fread_or_exit(layer_normf_gamma, sizeof(float), d_model, fp);
     fread_or_exit(layer_normf_beta, sizeof(float), d_model, fp);
 
-    printf("before copying weights to the gpu\n");
+    //printf("before copying weights to the gpu\n");
     // no op if no GPU
     copy_weights_to_gpu();
 
@@ -1413,31 +1413,21 @@ int main(int argc, char *argv[])
     char temp_token_str[32];
     
     // Load GTP2 weights
-    printf("Loading GPT2 weights...\n");
-#ifdef USE_CUDA
-    print_gpu_memory_usage();
-#endif
+    //printf("Loading GPT2 weights...\n");
     allocate_weights();
-    init_layer_table();
-    printf("after layer table init\n");
+    init_layer_table();    
 
-    //update_layer_table();
-#ifdef USE_CUDA
-    
-    print_gpu_memory_usage();
-    //return 1;
-#endif
     // 
     // Open the file containing the weights, load all the weights and close it
     FILE * fp = fopen(MODEL_WEIGHTS_FILENAME,"rb");
-    printf("filed is opened\n");
+    //printf("filed is opened\n");
     load_all_weights(fp);
     fclose(fp);
 
     update_layer_table();
-    printf("load weights...");
+    //printf("load weights...");
 #ifdef USE_CUDA
-    print_gpu_memory_usage();
+    //print_gpu_memory_usage();
 
 #endif
 
@@ -1462,12 +1452,9 @@ int main(int argc, char *argv[])
 
     transpose_2d(&wte[0][0], vocab_size,d_model , &wte_T[0][0]);
 #ifdef USE_CUDA
-    // Copy now to GPU
-    printf("copying %ld\n",d_model * sizeof(*wte_T_d));
-
     CUDA_CHECK(cudaMemcpy(wte_T_d, wte_T, d_model * sizeof(*wte_T_d), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaDeviceSynchronize());
-    print_gpu_memory_usage();
+    //print_gpu_memory_usage();
     //return 1;
 #endif
 
@@ -1478,13 +1465,15 @@ int main(int argc, char *argv[])
 
     char *cli_input = NULL;
     char *json_out_file = NULL;
+    int stream = 1;     // streaming on by default
+    int verbose = 0;    // chunk stats off by default
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--prompt") == 0 && i + 1 < argc) {
             cli_input = argv[i + 1];
-            i++; 
+            i++;
         }else if (strcmp(argv[i], "--req_out_tokens")==0 && i + 1 < argc){
-            requested_out_tokens = atoi(argv[i+1]); // fine to use atoi for now. 
+            requested_out_tokens = atoi(argv[i+1]); // fine to use atoi for now.
             i++;
         }else if(strcmp(argv[i], "--token_chunk_size")==0 && i + 1 < argc){
             token_chunk_size = atoi(argv[i+1]); // fine to use atoi for now
@@ -1492,11 +1481,17 @@ int main(int argc, char *argv[])
         }else if(strcmp(argv[i], "--json_out_file")==0 && i + 1 < argc){
             json_out_file = argv[i+1];
             i++;
+        }else if(strcmp(argv[i], "--no-stream")==0){
+            stream = 0;
+        }else if(strcmp(argv[i], "--verbose")==0){
+            verbose = 1;
         }
     }
-    printf("req_out_tokens = %d\n",requested_out_tokens);
-    printf("token_chunk_size = %d\n",token_chunk_size);
-    printf("json_out_file = %s\n",json_out_file);
+    if (verbose) {
+        printf("req_out_tokens = %d\n",requested_out_tokens);
+        printf("token_chunk_size = %d\n",token_chunk_size);
+        printf("json_out_file = %s\n",json_out_file);
+    }
 
     while(1){ 
         
@@ -1514,13 +1509,29 @@ int main(int argc, char *argv[])
                 printf("QUIT\n");
                 break;
             }
-            
+
+            // Prompt for generation parameters
+            char param_buf[64];
+            printf("max_length [%d]: ", requested_out_tokens);
+            if (fgets(param_buf, sizeof(param_buf), stdin) != NULL) {
+                param_buf[strcspn(param_buf, "\n")] = 0;
+                if (strlen(param_buf) > 0) {
+                    requested_out_tokens = atoi(param_buf);
+                }
+            }
+            printf("temperature [%.1f]: ", temperature);
+            if (fgets(param_buf, sizeof(param_buf), stdin) != NULL) {
+                param_buf[strcspn(param_buf, "\n")] = 0;
+                if (strlen(param_buf) > 0) {
+                    temperature = atof(param_buf);
+                }
+            }
         }
         // store prompt in json
         json_object_set_new(perf_root, "prompt", json_string(input_buffer));
 
         clock_gettime(CLOCK_MONOTONIC, &start); // start the overall inference
-        printf("\nGPT2 Inference - Start\n");
+        //printf("\nGPT2 Inference - Start\n");
 
         // cleanup, move to the end (move to function)
         memset(tokens,0,sizeof(tokens));
@@ -1553,14 +1564,15 @@ int main(int argc, char *argv[])
         // It will be updated to point to the *newly added* token in each generation loop.
         int last_token_position = current_seq_len - 1; 
 
-        printf("\n--- Token Generation Performance ---\n");
-        printf("Initial prompt length: %d\n", current_seq_len);
+        if (verbose) {
+            printf("\n--- Token Generation Performance ---\n");
+            printf("Initial prompt length: %d\n", current_seq_len);
+            printf("--- Total Time for Single Forward Pass (O(N^2) Measurement) ---\n");
+            printf("Context Length | Total Pass Time (s)\n");
+            printf("------------------------------------\n");
+        }
 
         clock_gettime(CLOCK_MONOTONIC, &loop_start);
-
-        printf("--- Total Time for Single Forward Pass (O(N^2) Measurement) ---\n");
-        printf("Context Length | Total Pass Time (s)\n");
-        printf("------------------------------------\n");
          
         int last_index = 0;
 
@@ -1716,7 +1728,24 @@ int main(int argc, char *argv[])
             //// Use sampled_token as your predicted next token
             tokens[current_seq_len++] = sampled_token;
             last_token_position = current_seq_len -1;
-            //printf("%d ",sampled_token);
+
+            // --- Stream token to stdout ---
+            if (stream) {
+                char stream_req[128];
+                char stream_resp[512];
+                snprintf(stream_req, sizeof(stream_req),
+                         "{\"mode\": \"decode\", \"tokens\": [%d]}", sampled_token);
+                send_json_to_tokenizer(stream_req, stream_resp);
+                // Parse the "text" field from JSON response
+                json_error_t jerr;
+                json_t *jresp = json_loads(stream_resp, 0, &jerr);
+                if (jresp) {
+                    const char *txt = json_string_value(json_object_get(jresp, "text"));
+                    if (txt) printf("%s", txt);
+                    json_decref(jresp);
+                }
+                fflush(stdout);
+            }
 
             // --- Per-token timing ---
             clock_gettime(CLOCK_MONOTONIC, &token_end);
@@ -1740,10 +1769,12 @@ int main(int argc, char *argv[])
             if (((ii + 1) % token_chunk_size == 0) || ((ii + 1) == requested_out_tokens)) {
                 clock_gettime(CLOCK_MONOTONIC, &loop_end);
                 double chunk_elapsed = (loop_end.tv_sec - loop_start.tv_sec) + (loop_end.tv_nsec - loop_start.tv_nsec) / 1e9;
-                printf("  Generated %d tokens. Total context length: %d. Time for last %d tokens: %.4f seconds. Avg/token (this chunk): %.4f s\n", 
-                       (ii + 1), current_seq_len, token_chunk_size, chunk_elapsed, chunk_elapsed / token_chunk_size);
 
-                printf("------------------------------------\n"); // Separator for chunks
+                if (verbose) {
+                    printf("  Generated %d tokens. Total context length: %d. Time for last %d tokens: %.4f seconds. Avg/token (this chunk): %.4f s\n",
+                           (ii + 1), current_seq_len, token_chunk_size, chunk_elapsed, chunk_elapsed / token_chunk_size);
+                    printf("------------------------------------\n");
+                }
 
                 clock_gettime(CLOCK_MONOTONIC, &loop_start); // Reset timer for next chunk
 
@@ -1770,13 +1801,22 @@ int main(int argc, char *argv[])
 
 
         send_json_to_tokenizer(decode_request, decode_response);
-        printf("\nDecode Response: %s\n", decode_response);
 
+        if (stream) {
+            printf("\n");  // newline after streamed tokens
+        } else {
+            printf("\nDecode Response: %s\n", decode_response);
+        }
 
         clock_gettime(CLOCK_MONOTONIC, &end);
         total_inference_elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
-        printf("\nGPT2 Inference - End (Total Generation Time: %.4f seconds)\n", total_inference_elapsed);
-        printf("Average Time per Token (overall generation): %.4f seconds\n", total_inference_elapsed / requested_out_tokens);
+
+        if (verbose) {
+            printf("\nGPT2 Inference - End (Total Generation Time: %.4f seconds)\n", total_inference_elapsed);
+            printf("Average Time per Token (overall generation): %.4f seconds\n", total_inference_elapsed / requested_out_tokens);
+        } else {
+            printf("[%.1f tokens/s]\n", requested_out_tokens / total_inference_elapsed);
+        }
     
         if (cli_input){
             // If input was provided via --prompt, only run once

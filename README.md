@@ -1,296 +1,176 @@
 
 # GPT2.C — C Implementation of GPT-2 Inference
 
-A C implementation of GPT-2 inference, using Hugging Face weights converted to a custom binary format. Tokenization is handled via a Python server. Using one external library for logging
+A C implementation of GPT-2 inference, using Hugging Face weights converted to a custom binary format. Tokenization is handled via a Python server.
+
+Supported platforms: ARM64 macOS, x86_64 Linux. Optional CUDA GPU acceleration on Linux.
 
 ---
-## Setup Instructions
 
-### 1. Python Environment
+## Quick Start
 
-#### Create a virtual environment:
+Run the setup script to install all dependencies, download model weights, and set up the Python environment:
 ```bash
-python3.9 -m venv transformers_env
+./setup.sh
 ```
 
-Activate it:
-```bash
-source transformers_env/bin/activate
-```
+The script will:
+1. Install [uv](https://docs.astral.sh/uv/) (Python package manager)
+2. Install system dependencies (jansson, openblas, build tools) via brew or apt
+3. Download tokenizer data
+4. Download GPT-2 model weights (you choose which sizes)
+5. Set up the Python environment (`uv sync`)
 
-Install dependencies:
-```bash
-pip install -r requirements.in
-```
+Once setup is complete, follow the printed instructions to build and run.
 
-⚠️ Due to Python package version mismatches, loading and caching Hugging Face models might fail.
-You can avoid this by manually downloading the model files (see below).
+---
 
+## Manual Setup
 
+If you prefer to set things up manually:
 
+### 1. System Dependencies
 
-### 2. Download Prebuilt GPT2.C Weights (Recommended)
-Place these files under weights directory (create this dir in the project root):
-
-GPT-2 Small:
-https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_c_weights.bin
-
-GPT-2 Medium:
-https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_medium_c_weights.bin
-
-GPT-2 Large:
-https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_large_c_weights.bin
-
-### 3. Create Weights from Hugging Face Files (Optional)
-You can generate the weights yourself using extract_weights.py.
-
-The required directories (transformers/models/gpt2, etc.) are already part of the repo.
-Just place the following files in the correct folder.
-
-GPT-2 Small — transformers/models/gpt2:
-```bash
-cd transformers/models/gpt2
-
-wget https://huggingface.co/gpt2/resolve/main/pytorch_model.bin
-wget https://huggingface.co/gpt2/resolve/main/merges.txt
-wget https://huggingface.co/gpt2/resolve/main/vocab.json
-wget https://huggingface.co/gpt2/resolve/main/tokenizer_config.json
-wget https://huggingface.co/gpt2/resolve/main/config.json
-```
-
-GPT-2 Medium — transformers/models/gpt2-medium:
-```bash
-cd transformers/models/gpt2-medium
-
-wget https://huggingface.co/gpt2-medium/resolve/main/pytorch_model.bin
-wget https://huggingface.co/gpt2-medium/resolve/main/merges.txt
-wget https://huggingface.co/gpt2-medium/resolve/main/vocab.json
-wget https://huggingface.co/gpt2-medium/resolve/main/tokenizer_config.json
-wget https://huggingface.co/gpt2-medium/resolve/main/config.json
-```
-
-GPT-2 Large — transformers/models/gpt2-large:
-```bash
-cd transformers/models/gpt2-large
-
-wget https://huggingface.co/gpt2-large/resolve/main/pytorch_model.bin
-wget https://huggingface.co/gpt2-large/resolve/main/merges.txt
-wget https://huggingface.co/gpt2-large/resolve/main/vocab.json
-wget https://huggingface.co/gpt2-large/resolve/main/tokenizer_config.json
-wget https://huggingface.co/gpt2-large/resolve/main/config.json
-```
-
-Then run:
-```bash
-python extract_weights.py --model-size small     # or medium / large
-```
-
-
-## Compiler & Build Instructions
-Tested with:
-```text
-Apple clang version 16.0.0 (clang-1600.0.26.6)
-Target: arm64-apple-darwin23.6.0
-Thread model: posix
-
-Linux 6.14.0-36-generic #36~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC x86_64
-
-```
-
-Install Homebrew (if needed):
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-
-Install Jansson (JSON library dependency):
-OSX
+macOS:
 ```bash
 brew install jansson
 ```
-Ubuntu run the install_dependencies.sh
+
+Linux (Ubuntu/Debian):
 ```bash
-sudo ./install_dependencies.sh
+sudo apt-get install -y build-essential libjansson-dev libopenblas-dev
 ```
 
+### 2. Python Environment
 
-## Build Targets
-ARM64 OSX
-X86_64
-
-### Standard Build (Without KV Cache - only for comperisons)
-
-To build the standard, non-cached versions of the models, which are useful for baseline comparisons:
-
-Build GPT-2 Small:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and sync dependencies:
 ```bash
-make small
+uv sync
 ```
 
-Build GPT-2 Medium:
+### 3. Download Model Weights
+
+Place weight files under the `weights/` directory:
+
+| Model | File | URL |
+|-------|------|-----|
+| Small (124M) | `gpt2_c_weights.bin` | https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_c_weights.bin |
+| Medium (355M) | `gpt2_medium_c_weights.bin` | https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_medium_c_weights.bin |
+| Large (774M) | `gpt2_large_c_weights.bin` | https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_large_c_weights.bin |
+
+### 4. Download Tokenizer
+
 ```bash
-make medium
+curl -L -o tokenizer.json https://huggingface.co/openai-community/gpt2/resolve/main/tokenizer.json
 ```
 
-Build GPT-2 Large:
+### 5. Create Weights from Hugging Face (Optional)
+
+You can generate the weights yourself instead of downloading prebuilt files:
 ```bash
-make large
+uv run python extract_weights.py --model-size small     # or medium / large
 ```
 
-Build all targets
-```bash
-make 
-```
+This requires the original HuggingFace model files under `transformers/models/gpt2/` (see `extract_weights.py` for details).
 
-### High-Performance Build (With KV Cache)
-To enable the high-performance KV Cache, pass the ENABLE_KV_CACHE flag via CPPFLAGS. This changes the token generation complexity from O(N²) to O(N), resulting in a significant speedup
+---
 
-Build GPT-2 Small:
-```bash
-make small CPPFLAGS="-DENABLE_KV_CACHE"
-```
+## Building
 
-Build GPT-2 Medium:
-```bash
-make medium CPPFLAGS="-DENABLE_KV_CACHE"
-```
+KV cache is enabled by default for all builds, providing O(N) generation complexity.
 
-Build GPT-2 Large:
-```bash
-make large CPPFLAGS="-DENABLE_KV_CACHE"
-```
+### CPU Build
 
-Build all targets
 ```bash
-make CPPFLAGS="-DENABLE_KV_CACHE"
+make small          # GPT-2 Small (124M)
+make medium         # GPT-2 Medium (355M)
+make large          # GPT-2 Large (774M)
+make                # All targets
 ```
 
 ### GPU Build (CUDA + cuBLAS)
-Requires NVIDIA GPU with CUDA toolkit installed. Builds with KV cache enabled by default.
 
-Build GPU GPT-2 Small:
-```bash
-make gpu small
-```
+Requires NVIDIA GPU with CUDA toolkit installed (Linux x86_64 only). The Makefile will check for GPU availability and report a clear error if not found.
 
-Build GPU GPT-2 Medium:
 ```bash
-make gpu medium
-```
-
-Build GPU GPT-2 Large:
-```bash
-make gpu large
-```
-
-Build all GPU targets:
-```bash
-make gpu
+make gpu small      # GPT-2 Small (124M)
+make gpu medium     # GPT-2 Medium (355M)
+make gpu large      # GPT-2 Large (774M)
+make gpu            # All targets
 ```
 
 ### Cleaning
-To remove all compiled binaries from the project directory:
 
 ```bash
 make clean
 ```
 
+---
 
 ## Running Inference
-1. Activate Python environment:
+
+1. Start the tokenizer server:
 ```bash
-source transformers_env/bin/activate
+uv run python tokenizer.py
 ```
 
-2. Start the tokenizer server:
-```bash
-python tokenizer.py
-```
+2. Run a model (in another terminal):
 
-3. Run a model:
 One-shot prompt:
 ```bash
-./out/gpt2_small --prompt "Once upon a time..."
+./out/cpu/gpt2_small --prompt "Once upon a time..."
 ```
 
 Interactive mode:
 ```bash
-./out/gpt2_small
+./out/cpu/gpt2_small
 ```
 
+GPU inference:
+```bash
+./out/gpu/gpt2_small --prompt "Once upon a time..."
+```
+
+---
 
 ## Running Performance Tests
 
-Run all models (CPU + GPU):
 ```bash
-./scripts/run.sh
-```
-
-Run a specific model:
-```bash
-./scripts/run.sh small
-```
-
-Run GPU only:
-```bash
-./scripts/run.sh --gpu
-```
-
-Run CPU only:
-```bash
-./scripts/run.sh --cpu
-```
-
-Run GPU with NVIDIA Nsight Systems profiling:
-```bash
-./scripts/run.sh --gpu --profile small
-```
-
-Flags can be combined with model sizes:
-```bash
-./scripts/run.sh --gpu small medium
+./scripts/run.sh                        # All models, CPU + GPU
+./scripts/run.sh small                  # Specific model
+./scripts/run.sh --gpu                  # GPU only
+./scripts/run.sh --cpu                  # CPU only
+./scripts/run.sh --gpu --profile small  # GPU with nsys profiling
 ```
 
 ### Analysing Results
 
-Analyse all results (CPU + GPU):
 ```bash
-python scripts/performance_analysis.py
+python scripts/performance_analysis.py          # All results
+python scripts/performance_analysis.py --gpu    # GPU-only
+python scripts/performance_analysis.py --cpu    # CPU-only
 ```
 
-Analyse GPU-only results:
-```bash
-python scripts/performance_analysis.py --gpu
+---
+
+## Directory Structure
+
 ```
-
-Analyse CPU-only results:
-```bash
-python scripts/performance_analysis.py --cpu
-```
-
-
-📁 Directory Structure (Relevant Parts)
-```bash
 .
-├── out/                            # Compiled binaries
-│   ├── small/                      # CUDA object files (small model)
-│   ├── medium/                     # CUDA object files (medium model)
-│   └── large/                      # CUDA object files (large model)
-├── cuda/                           # CUDA kernel source files
-├── include/                        # Header files (cuda_kernels.h, model_config.h)
-├── logs/                           # JSON logs and nsys profile reports
-├── scripts/                        # Automation and performance analysis
-├── tokenizer.py                    # Tokenizer server
-├── extract_weights.py              # Script to extract weights from Hugging Face models
-├── transformers/
-│   └── models/
-│       ├── gpt2/
-│       ├── gpt2-medium/
-│       └── gpt2-large/
-├── gpt2.c                          # Main C code for inference
+├── setup.sh                        # One-step project setup
+├── gpt2.c                          # Main C inference code
 ├── Makefile
-├── requirements.txt                # Python modules
-├── train_gpt2.py                   # Python GPT2 inference impl.
+├── pyproject.toml                  # Python dependencies (uv)
+├── tokenizer.py                    # Tokenizer server
+├── extract_weights.py              # Weight extraction from HuggingFace
+├── cuda/                           # CUDA kernel source files
+├── include/                        # Headers (cuda_kernels.h, model_config.h)
+├── scripts/                        # Automation and performance analysis
 ├── weights/                        # Model weights
-├── install_dependencies.sh         # (Ubuntu 24.04 only)
-└── README.md
+├── logs/                           # JSON logs and nsys profile reports
+├── out/
+│   ├── cpu/                        # CPU binaries
+│   └── gpu/                        # GPU binaries + CUDA object files
+└── transformers/
+    └── models/                     # HuggingFace model files (optional)
 ```

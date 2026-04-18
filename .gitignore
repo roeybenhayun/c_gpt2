@@ -23,6 +23,7 @@ unit_modules/c/dot_2d/out/*
 # ───────── Local env / editors ─────────
 transformers_env/
 transformer_env/
+.venv/
 .vscode/
 
 

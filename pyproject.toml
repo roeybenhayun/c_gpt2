@@ -1,0 +1,13 @@
+[project]
+name = "c-gpt2"
+version = "0.1.0"
+description = "GPT-2 inference in C with CUDA acceleration"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.26",
+    "transformers>=4.38",
+    "tokenizers",
+    "matplotlib",
+    "torch>=2.4.0",
+    "accelerate",
+]
