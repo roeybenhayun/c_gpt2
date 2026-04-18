@@ -1541,6 +1541,14 @@ int main(int argc, char *argv[])
         memset(decode_request, 0, sizeof(decode_request));
         memset(decode_response, 0, sizeof(decode_response));
         memset(token_list,0,sizeof(token_list));
+        // Reset KV caches for each new prompt
+#ifdef USE_CUDA
+        CUDA_CHECK(cudaMemset(K_cache_d, 0, num_layers * sizeof *K_cache_d));
+        CUDA_CHECK(cudaMemset(V_cache_d, 0, num_layers * sizeof *V_cache_d));
+#else
+        memset(K_cache, 0, sizeof(K_cache));
+        memset(V_cache, 0, sizeof(V_cache));
+#endif
         // after parsing initial tokens
         // should be reset for each new prompt
         last_index = 0;
@@ -1661,31 +1669,29 @@ int main(int argc, char *argv[])
             // Compute probabilities
             float probs[vocab_size];
 
-#ifdef USE_CUDA 
+#ifdef USE_CUDA
             float * logit_row_d = &logits_d[last_token_position][0];
-            softmax_cuda(logit_row_d,1,vocab_size,vocab_size,logit_row_d,1.0f);
-            
-            CUDA_CHECK(cudaMemcpy(probs, logit_row_d, vocab_size*sizeof(float), cudaMemcpyDeviceToHost));
+            float effective_temp = (temperature <= 0.0f) ? 1.0f : temperature;
+            softmax_cuda(logit_row_d,1,vocab_size,vocab_size,logit_row_d,effective_temp);
 
-            
-            // allocate a buffer for the logic to copy from the gpu. 
+            CUDA_CHECK(cudaMemcpy(probs, logit_row_d, vocab_size*sizeof(float), cudaMemcpyDeviceToHost));
 
 #else
             //===========================================SOFTMAX START===================================//
-            // --- Search the top 5 ---
             float *logit_row = &logits[last_token_position][0];
+            float effective_temp = (temperature <= 0.0f) ? 1.0f : temperature;
 
             // Softmax with temperature and numerical stability
             float max_logit = -INFINITY;
             for (int i = 0; i < vocab_size; i++) {
-                float val = logit_row[i] / temperature;
+                float val = logit_row[i] / effective_temp;
                 if (val > max_logit) max_logit = val;
             }
 
-            
+
             float sum = 0.0;
             for (int i = 0; i < vocab_size; i++) {
-                float val = (logit_row[i] / temperature) - max_logit;
+                float val = (logit_row[i] / effective_temp) - max_logit;
                 probs[i] = expf(val);
                 sum += probs[i];
             }
@@ -1694,35 +1700,42 @@ int main(int argc, char *argv[])
             for (int i = 0; i < vocab_size; i++) {
                 probs[i] /= sum;
             }
-            //printf("softmax done");
     #endif
 
-            // --- Apply Top-K Sampling ---
-            int top_k_val = 40; // Choose your desired K value (e.g., 40, 50, 100)
-            // Ensure these arrays are large enough to hold 'top_k_val' elements
-            int selected_indices[vocab_size]; // Use vocab_size as max possible K, or pass actual max_k
-            float selected_probs[vocab_size]; // Same here
+            int sampled_token = -1;
 
-            //printf("top-k-sample\n");
-            top_k_sample(probs, vocab_size, top_k_val, selected_indices, selected_probs);
-
-            // --- Now, sample from the top_k_val chosen tokens ---
-            float r = (float)rand() / RAND_MAX;
-            float cumulative_sampled_probs = 0.0;
-            int sampled_token = -1; // This will store the final token index
-
-            for (int i = 0; i < top_k_val; i++) { // Loop only through the top K tokens
-                cumulative_sampled_probs += selected_probs[i];
-                if (r < cumulative_sampled_probs) {
-                    sampled_token = selected_indices[i]; // Use the index from the top_k_indices array
-                    break;
+            if (temperature <= 0.0f) {
+                // Greedy decoding: pick the token with highest probability
+                float max_prob = -1.0f;
+                for (int i = 0; i < vocab_size; i++) {
+                    if (probs[i] > max_prob) {
+                        max_prob = probs[i];
+                        sampled_token = i;
+                    }
                 }
-            }
+            } else {
+                // --- Apply Top-K Sampling ---
+                int top_k_val = 40;
+                int selected_indices[vocab_size];
+                float selected_probs[vocab_size];
 
-            // If r is very close to 1.0 due to float precision, it might exceed cumulative_sampled_probs in rare cases.
-            // Fallback to the last token in the list if no token is explicitly sampled.
-            if (sampled_token == -1 && top_k_val > 0) {
-                sampled_token = selected_indices[top_k_val - 1];
+                top_k_sample(probs, vocab_size, top_k_val, selected_indices, selected_probs);
+
+                // --- Now, sample from the top_k_val chosen tokens ---
+                float r = (float)rand() / RAND_MAX;
+                float cumulative_sampled_probs = 0.0;
+
+                for (int i = 0; i < top_k_val; i++) {
+                    cumulative_sampled_probs += selected_probs[i];
+                    if (r < cumulative_sampled_probs) {
+                        sampled_token = selected_indices[i];
+                        break;
+                    }
+                }
+
+                if (sampled_token == -1 && top_k_val > 0) {
+                    sampled_token = selected_indices[top_k_val - 1];
+                }
             }
 
             //// Use sampled_token as your predicted next token
