@@ -670,57 +670,56 @@ static void transformer_block_cpu(float *input,int n_tokens,int n_new_tokens,
 
 #ifdef USE_CUDA
 static void allocate_weights_gpu(void){
-    CUDA_CHECK(cudaMalloc(&wte_d, vocab_size * sizeof *wte_d));
-    CUDA_CHECK(cudaMalloc(&wpe_d, ctx_len * sizeof *wpe_d));
-    CUDA_CHECK(cudaMalloc(&wte_T_d, d_model * sizeof *wte_T_d));
+    CUDA_CHECK(cudaMalloc((void **)&wte_d, vocab_size * sizeof *wte_d));
+    CUDA_CHECK(cudaMalloc((void **)&wpe_d, ctx_len * sizeof *wpe_d));
+    CUDA_CHECK(cudaMalloc((void **)&wte_T_d, d_model * sizeof *wte_T_d));
 
-    CUDA_CHECK(cudaMalloc(&W_q_d, num_layers * sizeof *W_q_d));
-    CUDA_CHECK(cudaMalloc(&W_k_d, num_layers * sizeof *W_k_d));
-    CUDA_CHECK(cudaMalloc(&W_v_d, num_layers * sizeof *W_v_d));
-    CUDA_CHECK(cudaMalloc(&b_q_d, num_layers * sizeof *b_q_d));
-    CUDA_CHECK(cudaMalloc(&b_k_d, num_layers * sizeof *b_k_d));
-    CUDA_CHECK(cudaMalloc(&b_v_d, num_layers * sizeof *b_v_d));
-    CUDA_CHECK(cudaMalloc(&attn_proj_weight_d, num_layers * sizeof *attn_proj_weight_d));
-    CUDA_CHECK(cudaMalloc(&attn_proj_bias_d, num_layers * sizeof *attn_proj_bias_d));
-    CUDA_CHECK(cudaMalloc(&W1_d, num_layers * sizeof *W1_d));
-    CUDA_CHECK(cudaMalloc(&W2_d, num_layers * sizeof *W2_d));
-    CUDA_CHECK(cudaMalloc(&b1_d, num_layers * sizeof *b1_d));
-    CUDA_CHECK(cudaMalloc(&b2_d, num_layers * sizeof *b2_d));
-    CUDA_CHECK(cudaMalloc(&layer_norm1_gamma_d, num_layers * sizeof *layer_norm1_gamma_d));
-    CUDA_CHECK(cudaMalloc(&layer_norm1_beta_d, num_layers * sizeof *layer_norm1_beta_d));
-    CUDA_CHECK(cudaMalloc(&layer_norm2_gamma_d, num_layers * sizeof *layer_norm2_gamma_d));
-    CUDA_CHECK(cudaMalloc(&layer_norm2_beta_d, num_layers * sizeof *layer_norm2_beta_d));
+    CUDA_CHECK(cudaMalloc((void **)&W_q_d, num_layers * sizeof *W_q_d));
+    CUDA_CHECK(cudaMalloc((void **)&W_k_d, num_layers * sizeof *W_k_d));
+    CUDA_CHECK(cudaMalloc((void **)&W_v_d, num_layers * sizeof *W_v_d));
+    CUDA_CHECK(cudaMalloc((void **)&b_q_d, num_layers * sizeof *b_q_d));
+    CUDA_CHECK(cudaMalloc((void **)&b_k_d, num_layers * sizeof *b_k_d));
+    CUDA_CHECK(cudaMalloc((void **)&b_v_d, num_layers * sizeof *b_v_d));
+    CUDA_CHECK(cudaMalloc((void **)&attn_proj_weight_d, num_layers * sizeof *attn_proj_weight_d));
+    CUDA_CHECK(cudaMalloc((void **)&attn_proj_bias_d, num_layers * sizeof *attn_proj_bias_d));
+    CUDA_CHECK(cudaMalloc((void **)&W1_d, num_layers * sizeof *W1_d));
+    CUDA_CHECK(cudaMalloc((void **)&W2_d, num_layers * sizeof *W2_d));
+    CUDA_CHECK(cudaMalloc((void **)&b1_d, num_layers * sizeof *b1_d));
+    CUDA_CHECK(cudaMalloc((void **)&b2_d, num_layers * sizeof *b2_d));
+    CUDA_CHECK(cudaMalloc((void **)&layer_norm1_gamma_d, num_layers * sizeof *layer_norm1_gamma_d));
+    CUDA_CHECK(cudaMalloc((void **)&layer_norm1_beta_d, num_layers * sizeof *layer_norm1_beta_d));
+    CUDA_CHECK(cudaMalloc((void **)&layer_norm2_gamma_d, num_layers * sizeof *layer_norm2_gamma_d));
+    CUDA_CHECK(cudaMalloc((void **)&layer_norm2_beta_d, num_layers * sizeof *layer_norm2_beta_d));
 
-    CUDA_CHECK(cudaMalloc(&layer_normf_gamma_d, d_model * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&layer_normf_beta_d, d_model * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&tokens_d, ctx_len * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&embeddings_d, ctx_len * sizeof *embeddings_d));
+    CUDA_CHECK(cudaMalloc((void **)&layer_normf_gamma_d, d_model * sizeof(float)));
+    CUDA_CHECK(cudaMalloc((void **)&layer_normf_beta_d, d_model * sizeof(float)));
+    CUDA_CHECK(cudaMalloc((void **)&tokens_d, ctx_len * sizeof(int)));
+    CUDA_CHECK(cudaMalloc((void **)&embeddings_d, ctx_len * sizeof *embeddings_d));
 
-    CUDA_CHECK(cudaMalloc(&X_norm_d, ctx_len * sizeof *X_norm_d));
-    CUDA_CHECK(cudaMalloc(&X_norm2_d, ctx_len * sizeof *X_norm2_d));
-    CUDA_CHECK(cudaMalloc(&residual_out_d, ctx_len * sizeof *residual_out_d));
-    CUDA_CHECK(cudaMalloc(&residual2_out_d, ctx_len * sizeof *residual2_out_d));
+    CUDA_CHECK(cudaMalloc((void **)&X_norm_d, ctx_len * sizeof *X_norm_d));
+    CUDA_CHECK(cudaMalloc((void **)&X_norm2_d, ctx_len * sizeof *X_norm2_d));
+    CUDA_CHECK(cudaMalloc((void **)&residual_out_d, ctx_len * sizeof *residual_out_d));
+    CUDA_CHECK(cudaMalloc((void **)&residual2_out_d, ctx_len * sizeof *residual2_out_d));
 
-    CUDA_CHECK(cudaMalloc(&Q_d, ctx_len * sizeof *Q_d));
-    CUDA_CHECK(cudaMalloc(&K_cache_d, num_layers * sizeof *K_cache_d));
-    CUDA_CHECK(cudaMalloc(&V_cache_d, num_layers * sizeof *V_cache_d));
-    
-    CUDA_CHECK(cudaMalloc(&scores_h_d, ctx_len * sizeof *scores_h_d));
-    CUDA_CHECK(cudaMalloc(&weights_h_d, ctx_len * sizeof *weights_h_d));    
-    CUDA_CHECK(cudaMalloc(&context_d, ctx_len * sizeof *context_d));
+    CUDA_CHECK(cudaMalloc((void **)&Q_d, ctx_len * sizeof *Q_d));
+    CUDA_CHECK(cudaMalloc((void **)&K_cache_d, num_layers * sizeof *K_cache_d));
+    CUDA_CHECK(cudaMalloc((void **)&V_cache_d, num_layers * sizeof *V_cache_d));
 
-    CUDA_CHECK(cudaMalloc(&X1_d, ctx_len * sizeof *X1_d));
-    CUDA_CHECK(cudaMalloc(&X1_out_d, ctx_len * sizeof *X1_out_d));    
-    CUDA_CHECK(cudaMalloc(&X2_d, ctx_len * sizeof *X2_d));
-    CUDA_CHECK(cudaMalloc(&X2_out_d, ctx_len * sizeof *X2_out_d));
-    CUDA_CHECK(cudaMalloc(&Xf_out_d, ctx_len * sizeof *Xf_out_d));
+    CUDA_CHECK(cudaMalloc((void **)&scores_h_d, ctx_len * sizeof *scores_h_d));
+    CUDA_CHECK(cudaMalloc((void **)&weights_h_d, ctx_len * sizeof *weights_h_d));
+    CUDA_CHECK(cudaMalloc((void **)&context_d, ctx_len * sizeof *context_d));
 
-    CUDA_CHECK(cudaMalloc(&final_attention_output_d, ctx_len * sizeof *final_attention_output_d));
-    
-    CUDA_CHECK(cudaMalloc(&context_heads_d, nof_heads* sizeof *context_heads_d));
-    
-    CUDA_CHECK(cudaMalloc(&logits_d, ctx_len * sizeof *logits_d));
-    
+    CUDA_CHECK(cudaMalloc((void **)&X1_d, ctx_len * sizeof *X1_d));
+    CUDA_CHECK(cudaMalloc((void **)&X1_out_d, ctx_len * sizeof *X1_out_d));
+    CUDA_CHECK(cudaMalloc((void **)&X2_d, ctx_len * sizeof *X2_d));
+    CUDA_CHECK(cudaMalloc((void **)&X2_out_d, ctx_len * sizeof *X2_out_d));
+    CUDA_CHECK(cudaMalloc((void **)&Xf_out_d, ctx_len * sizeof *Xf_out_d));
+
+    CUDA_CHECK(cudaMalloc((void **)&final_attention_output_d, ctx_len * sizeof *final_attention_output_d));
+
+    CUDA_CHECK(cudaMalloc((void **)&context_heads_d, nof_heads * sizeof *context_heads_d));
+
+    CUDA_CHECK(cudaMalloc((void **)&logits_d, ctx_len * sizeof *logits_d));
 
 }
 
@@ -957,7 +956,7 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
 
 
         // 4. Layer Norm 2 (on the last token only)
-        layernorm_cuda(&residual_out_d[i][0],1,d_model,tbp->ln2_gamma,tbp->ln2_beta, &X_norm2_d[i][0],eps);
+        layernorm_cuda((float (*)[d_model])&residual_out_d[i][0],1,d_model,tbp->ln2_gamma,tbp->ln2_beta, (float (*)[d_model])&X_norm2_d[i][0],eps);
 
 
         // 5. MLP (on the last token only)
