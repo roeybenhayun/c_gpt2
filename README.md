@@ -145,7 +145,16 @@ GPU inference:
 
 ### Analysing Results
 
+Using `uv run` (no activation needed):
 ```bash
+uv run python scripts/performance_analysis.py          # All results
+uv run python scripts/performance_analysis.py --gpu    # GPU-only
+uv run python scripts/performance_analysis.py --cpu    # CPU-only
+```
+
+Or activate the virtual environment first:
+```bash
+source .venv/bin/activate
 python scripts/performance_analysis.py          # All results
 python scripts/performance_analysis.py --gpu    # GPU-only
 python scripts/performance_analysis.py --cpu    # CPU-only

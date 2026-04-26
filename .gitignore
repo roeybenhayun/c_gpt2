@@ -20,6 +20,14 @@ out/*
 logs/*
 unit_modules/c/dot_2d/out/*
 
+# ───────── Article videos (too large for git) ─────────
+docs/articles/*/assets/videos/*.mp4
+docs/articles/*/assets/videos/*.webm
+
+# ───────── Python cache ─────────
+__pycache__/
+*.pyc
+
 # ───────── Local env / editors ─────────
 transformers_env/
 transformer_env/

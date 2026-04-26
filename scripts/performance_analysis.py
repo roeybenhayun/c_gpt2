@@ -141,6 +141,185 @@ any_new_metrics = any(
     has_new_metrics(d) for d in list(cpu_json.values()) + list(gpu_json.values())
 )
 
+PLOT_DIR = "plots"
+
+# --- Plotting functions ---
+
+def plot_overlay(ax):
+    """Plot 1: Overlay — CPU (solid) vs GPU (dashed)."""
+    for model_name in files.keys():
+        color = colors[model_name]
+        label_name = format_label(model_name)
+
+        if model_name in cpu_data:
+            x, y, order = cpu_data[model_name]
+            x_fit, y_fit = fit_curve(x, y, order)
+            if has_comparison:
+                ax.plot(x, y, 'o', color=color, alpha=0.4, markersize=5)
+                ax.plot(x_fit, y_fit, '-', color=color, linewidth=2, label=f'{label_name} CPU')
+            else:
+                ax.plot(x, y, 'o', color=color, alpha=0.4, markersize=5)
+                ax.plot(x_fit, y_fit, '-', color=color, linewidth=2, label=f'{label_name}')
+
+        if model_name in gpu_data:
+            x, y, order = gpu_data[model_name]
+            x_fit, y_fit = fit_curve(x, y, order)
+            ax.plot(x, y, 's', color=color, alpha=0.4, markersize=5)
+            ax.plot(x_fit, y_fit, '--', color=color, linewidth=2, label=f'{label_name} GPU')
+
+    ax.set_xlabel("Total Context Length", fontsize=12)
+    ax.set_ylabel(f"Time for Last {chunk_size_label} Tokens (s)", fontsize=12)
+    if has_comparison:
+        ax.set_title("CPU vs GPU — Time to Generate Tokens", fontsize=14)
+    else:
+        ax.set_title("Time to Generate Tokens vs. Context Length", fontsize=14)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+def plot_speedup(ax):
+    """Plot 2: Speedup ratio (CPU / GPU)."""
+    for model_name in files.keys():
+        if model_name not in cpu_data or model_name not in gpu_data:
+            continue
+
+        color = colors[model_name]
+        label_name = format_label(model_name)
+
+        cpu_x, cpu_y, _ = cpu_data[model_name]
+        gpu_x, gpu_y, _ = gpu_data[model_name]
+
+        common_min = max(cpu_x.min(), gpu_x.min())
+        common_max = min(cpu_x.max(), gpu_x.max())
+        common_x = np.linspace(common_min, common_max, 50)
+
+        cpu_interp = np.interp(common_x, cpu_x, cpu_y)
+        gpu_interp = np.interp(common_x, gpu_x, gpu_y)
+
+        speedup = cpu_interp / gpu_interp
+
+        ax.plot(common_x, speedup, '-', color=color, linewidth=2, label=f'{label_name}')
+        avg_speedup = np.mean(speedup)
+        ax.axhline(y=avg_speedup, color=color, linestyle=':', alpha=0.5)
+        ax.text(common_x[-1] + 10, avg_speedup, f'{avg_speedup:.1f}x',
+                color=color, fontsize=11, fontweight='bold', va='center')
+
+    ax.axhline(y=1.0, color='gray', linestyle='-', alpha=0.3)
+    ax.set_xlabel("Total Context Length", fontsize=12)
+    ax.set_ylabel("Speedup (CPU time / GPU time)", fontsize=12)
+    ax.set_title("GPU Speedup over CPU", fontsize=14)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+def plot_tpot(ax):
+    """Plot 3: Per-token latency (TPOT) vs context length."""
+    for tag, json_dict, style in [("CPU", cpu_json, '-'), ("GPU", gpu_json, '--')]:
+        for model_name in files.keys():
+            if model_name not in json_dict:
+                continue
+            data = json_dict[model_name]
+            if not has_new_metrics(data):
+                continue
+
+            color = colors[model_name]
+            label_name = format_label(model_name)
+            tokens = data["per_token_latencies"]
+
+            ctx = np.array([t["context_len"] for t in tokens])
+            lat = np.array([t["latency_s"] for t in tokens])
+
+            # Smooth with a rolling average for readability
+            window = max(1, len(lat) // 30)
+            if window > 1:
+                lat_smooth = np.convolve(lat, np.ones(window)/window, mode='valid')
+                ctx_smooth = ctx[:len(lat_smooth)]
+            else:
+                lat_smooth = lat
+                ctx_smooth = ctx
+
+            label = f'{label_name} {tag}' if has_comparison else label_name
+            ax.plot(ctx_smooth, lat_smooth, style, color=color, linewidth=1.5, label=label, alpha=0.8)
+
+    ax.set_xlabel("Total Context Length", fontsize=12)
+    ax.set_ylabel("Per-Token Latency (s)", fontsize=12)
+    ax.set_title("TPOT — Per-Token Latency vs. Context Length", fontsize=14)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+def plot_summary_bars(ax):
+    """Plot 4: Bar charts — TTFT, Mean TPOT, TPS."""
+    model_names = [m for m in files.keys() if m in cpu_json or m in gpu_json]
+    n_models = len(model_names)
+    bar_width = 0.35
+    x_pos = np.arange(n_models)
+
+    # Collect metrics
+    metrics = {}
+    for tag, json_dict in [("CPU", cpu_json), ("GPU", gpu_json)]:
+        ttft_vals = []
+        tpot_vals = []
+        tps_vals = []
+        for m in model_names:
+            if m in json_dict and has_new_metrics(json_dict[m]):
+                d = json_dict[m]
+                ttft_vals.append(d["ttft_s"])
+                tpot_vals.append(d["mean_tpot_s"] * 1000)  # convert to ms
+                tps_vals.append(d["output_tps"])
+            else:
+                ttft_vals.append(0)
+                tpot_vals.append(0)
+                tps_vals.append(0)
+        metrics[tag] = {"ttft": ttft_vals, "tpot_ms": tpot_vals, "tps": tps_vals}
+
+    ax.set_title("Summary Metrics — CPU vs GPU", fontsize=14)
+
+    tags_present = [t for t in ["CPU", "GPU"] if any(v > 0 for v in metrics[t]["tps"])]
+
+    labels = [format_label(m) for m in model_names]
+
+    if len(tags_present) == 2:
+        offsets = [-bar_width/2, bar_width/2]
+        bar_colors = ['#5dade2', '#48c9b0']
+    else:
+        offsets = [0]
+        bar_colors = ['#5dade2']
+
+    # TPS bar chart
+    for i, tag in enumerate(tags_present):
+        vals = metrics[tag]["tps"]
+        bars = ax.bar(x_pos + offsets[i], vals, bar_width, label=f'{tag}', color=bar_colors[i], alpha=0.85)
+        for bar, val in zip(bars, vals):
+            if val > 0:
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1,
+                        f'{val:.1f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(labels, fontsize=11)
+    ax.set_ylabel("Tokens / Second", fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # Print summary table to console
+    print("\n--- Summary Metrics ---")
+    print(f"{'Model':<18} {'Tag':<5} {'TTFT (s)':<12} {'Mean TPOT (ms)':<16} {'TPS':<10} {'E2E (s)':<10}")
+    print("-" * 71)
+    for tag, json_dict in [("CPU", cpu_json), ("GPU", gpu_json)]:
+        if not json_dict:
+            continue
+        for m in model_names:
+            if m in json_dict and has_new_metrics(json_dict[m]):
+                d = json_dict[m]
+                print(f"{format_label(m):<18} {tag:<5} {d['ttft_s']:<12.4f} {d['mean_tpot_s']*1000:<16.2f} {d['output_tps']:<10.2f} {d['e2e_latency_s']:<10.2f}")
+
+def save_individual_plot(plot_func, filename, figsize=(10, 7)):
+    """Create a standalone figure for a single plot and save it."""
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    plot_func(ax)
+    fig.tight_layout()
+    path = os.path.join(PLOT_DIR, filename)
+    fig.savefig(path, dpi=150)
+    print(f"  -> Saved {path}")
+    plt.close(fig)
+
 # --- Determine layout ---
 # Row 1: [Overlay plot] [Speedup plot]          (always present when comparison)
 # Row 2: [TPOT vs ctx]  [TTFT / TPS bar charts] (when new metrics available)
@@ -167,172 +346,31 @@ else:
     ax_tpot = None
     ax_bars = None
 
-# ── Plot 1: Overlay — CPU (solid) vs GPU (dashed) ──
-for model_name in files.keys():
-    color = colors[model_name]
-    label_name = format_label(model_name)
-
-    if model_name in cpu_data:
-        x, y, order = cpu_data[model_name]
-        x_fit, y_fit = fit_curve(x, y, order)
-        if has_comparison:
-            ax_overlay.plot(x, y, 'o', color=color, alpha=0.4, markersize=5)
-            ax_overlay.plot(x_fit, y_fit, '-', color=color, linewidth=2, label=f'{label_name} CPU')
-        else:
-            ax_overlay.plot(x, y, 'o', color=color, alpha=0.4, markersize=5)
-            ax_overlay.plot(x_fit, y_fit, '-', color=color, linewidth=2, label=f'{label_name}')
-
-    if model_name in gpu_data:
-        x, y, order = gpu_data[model_name]
-        x_fit, y_fit = fit_curve(x, y, order)
-        ax_overlay.plot(x, y, 's', color=color, alpha=0.4, markersize=5)
-        ax_overlay.plot(x_fit, y_fit, '--', color=color, linewidth=2, label=f'{label_name} GPU')
-
-ax_overlay.set_xlabel("Total Context Length", fontsize=12)
-ax_overlay.set_ylabel(f"Time for Last {chunk_size_label} Tokens (s)", fontsize=12)
-if has_comparison:
-    ax_overlay.set_title("CPU vs GPU — Time to Generate Tokens", fontsize=14)
-else:
-    ax_overlay.set_title("Time to Generate Tokens vs. Context Length", fontsize=14)
-ax_overlay.legend(fontsize=10)
-ax_overlay.grid(True, alpha=0.3)
-
-# ── Plot 2: Speedup ratio (CPU / GPU) ──
+# Draw combined figure
+plot_overlay(ax_overlay)
 if ax_speedup is not None:
-    for model_name in files.keys():
-        if model_name not in cpu_data or model_name not in gpu_data:
-            continue
-
-        color = colors[model_name]
-        label_name = format_label(model_name)
-
-        cpu_x, cpu_y, _ = cpu_data[model_name]
-        gpu_x, gpu_y, _ = gpu_data[model_name]
-
-        common_min = max(cpu_x.min(), gpu_x.min())
-        common_max = min(cpu_x.max(), gpu_x.max())
-        common_x = np.linspace(common_min, common_max, 50)
-
-        cpu_interp = np.interp(common_x, cpu_x, cpu_y)
-        gpu_interp = np.interp(common_x, gpu_x, gpu_y)
-
-        speedup = cpu_interp / gpu_interp
-
-        ax_speedup.plot(common_x, speedup, '-', color=color, linewidth=2, label=f'{label_name}')
-        avg_speedup = np.mean(speedup)
-        ax_speedup.axhline(y=avg_speedup, color=color, linestyle=':', alpha=0.5)
-        ax_speedup.text(common_x[-1] + 10, avg_speedup, f'{avg_speedup:.1f}x',
-                 color=color, fontsize=11, fontweight='bold', va='center')
-
-    ax_speedup.axhline(y=1.0, color='gray', linestyle='-', alpha=0.3)
-    ax_speedup.set_xlabel("Total Context Length", fontsize=12)
-    ax_speedup.set_ylabel("Speedup (CPU time / GPU time)", fontsize=12)
-    ax_speedup.set_title("GPU Speedup over CPU", fontsize=14)
-    ax_speedup.legend(fontsize=10)
-    ax_speedup.grid(True, alpha=0.3)
-
-# ── Plot 3: Per-token latency (TPOT) vs context length ──
+    plot_speedup(ax_speedup)
 if ax_tpot is not None:
-    for tag, json_dict, style in [("CPU", cpu_json, '-'), ("GPU", gpu_json, '--')]:
-        for model_name in files.keys():
-            if model_name not in json_dict:
-                continue
-            data = json_dict[model_name]
-            if not has_new_metrics(data):
-                continue
-
-            color = colors[model_name]
-            label_name = format_label(model_name)
-            tokens = data["per_token_latencies"]
-
-            ctx = np.array([t["context_len"] for t in tokens])
-            lat = np.array([t["latency_s"] for t in tokens])
-
-            # Smooth with a rolling average for readability
-            window = max(1, len(lat) // 30)
-            if window > 1:
-                lat_smooth = np.convolve(lat, np.ones(window)/window, mode='valid')
-                ctx_smooth = ctx[:len(lat_smooth)]
-            else:
-                lat_smooth = lat
-                ctx_smooth = ctx
-
-            label = f'{label_name} {tag}' if has_comparison else label_name
-            ax_tpot.plot(ctx_smooth, lat_smooth, style, color=color, linewidth=1.5, label=label, alpha=0.8)
-
-    ax_tpot.set_xlabel("Total Context Length", fontsize=12)
-    ax_tpot.set_ylabel("Per-Token Latency (s)", fontsize=12)
-    ax_tpot.set_title("TPOT — Per-Token Latency vs. Context Length", fontsize=14)
-    ax_tpot.legend(fontsize=9)
-    ax_tpot.grid(True, alpha=0.3)
-
-# ── Plot 4: Bar charts — TTFT, Mean TPOT, TPS ──
+    plot_tpot(ax_tpot)
 if ax_bars is not None:
-    model_names = [m for m in files.keys() if m in cpu_json or m in gpu_json]
-    n_models = len(model_names)
-    bar_width = 0.35
-    x_pos = np.arange(n_models)
-
-    # Collect metrics
-    metrics = {}
-    for tag, json_dict in [("CPU", cpu_json), ("GPU", gpu_json)]:
-        ttft_vals = []
-        tpot_vals = []
-        tps_vals = []
-        for m in model_names:
-            if m in json_dict and has_new_metrics(json_dict[m]):
-                d = json_dict[m]
-                ttft_vals.append(d["ttft_s"])
-                tpot_vals.append(d["mean_tpot_s"] * 1000)  # convert to ms
-                tps_vals.append(d["output_tps"])
-            else:
-                ttft_vals.append(0)
-                tpot_vals.append(0)
-                tps_vals.append(0)
-        metrics[tag] = {"ttft": ttft_vals, "tpot_ms": tpot_vals, "tps": tps_vals}
-
-    # Use the bars axis for a grouped bar chart of TPS (most intuitive single number)
-    ax_bars.set_title("Summary Metrics — CPU vs GPU", fontsize=14)
-
-    tags_present = [t for t in ["CPU", "GPU"] if any(v > 0 for v in metrics[t]["tps"])]
-    sub_height = 0.8 / len(["TTFT", "Mean TPOT", "TPS"])
-
-    # Create 3 grouped bar groups stacked vertically using secondary display
-    labels = [format_label(m) for m in model_names]
-
-    if len(tags_present) == 2:
-        offsets = [-bar_width/2, bar_width/2]
-        bar_colors = ['#5dade2', '#48c9b0']
-    else:
-        offsets = [0]
-        bar_colors = ['#5dade2']
-
-    # TPS bar chart
-    for i, tag in enumerate(tags_present):
-        vals = metrics[tag]["tps"]
-        bars = ax_bars.bar(x_pos + offsets[i], vals, bar_width, label=f'{tag}', color=bar_colors[i], alpha=0.85)
-        for bar, val in zip(bars, vals):
-            if val > 0:
-                ax_bars.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1,
-                           f'{val:.1f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
-
-    ax_bars.set_xticks(x_pos)
-    ax_bars.set_xticklabels(labels, fontsize=11)
-    ax_bars.set_ylabel("Tokens / Second", fontsize=12)
-    ax_bars.legend(fontsize=10)
-    ax_bars.grid(True, alpha=0.3, axis='y')
-
-    # Print summary table to console
-    print("\n--- Summary Metrics ---")
-    print(f"{'Model':<18} {'Tag':<5} {'TTFT (s)':<12} {'Mean TPOT (ms)':<16} {'TPS':<10} {'E2E (s)':<10}")
-    print("-" * 71)
-    for tag, json_dict in [("CPU", cpu_json), ("GPU", gpu_json)]:
-        if not json_dict:
-            continue
-        for m in model_names:
-            if m in json_dict and has_new_metrics(json_dict[m]):
-                d = json_dict[m]
-                print(f"{format_label(m):<18} {tag:<5} {d['ttft_s']:<12.4f} {d['mean_tpot_s']*1000:<16.2f} {d['output_tps']:<10.2f} {d['e2e_latency_s']:<10.2f}")
+    plot_summary_bars(ax_bars)
 
 plt.tight_layout()
+
+# --- Save individual plots ---
+os.makedirs(PLOT_DIR, exist_ok=True)
+
+print("\n--- Saving individual plots ---")
+save_individual_plot(plot_overlay, "overlay.png")
+if has_comparison:
+    save_individual_plot(plot_speedup, "speedup.png")
+if any_new_metrics:
+    save_individual_plot(plot_tpot, "tpot.png")
+    save_individual_plot(plot_summary_bars, "summary.png")
+
+# Save combined figure
+combined_path = os.path.join(PLOT_DIR, "combined.png")
+fig.savefig(combined_path, dpi=150)
+print(f"  -> Saved {combined_path}")
+
 plt.show()
