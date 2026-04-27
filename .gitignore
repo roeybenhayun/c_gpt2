@@ -24,6 +24,9 @@ unit_modules/c/dot_2d/out/*
 docs/articles/*/assets/videos/*.mp4
 docs/articles/*/assets/videos/*.webm
 
+# ───────── Article drafts (committed when published) ─────────
+docs/cuda_kernels.md
+
 # ───────── Python cache ─────────
 __pycache__/
 *.pyc

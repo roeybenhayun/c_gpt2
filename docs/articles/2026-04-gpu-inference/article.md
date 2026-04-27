@@ -2,24 +2,6 @@
 
 _The third article in the series: from CPU baseline, to CPU with KV cache, to GPU._
 
-> **Status**: drafting
-> **Target publish**: 2026-04
-> **Substack URL**: TBD (currently in draft mode)
-
-> **Asset checklist** (tick off as uploaded to Substack)
-> - [ ] diagrams/cpu-to-gpu-pipeline.png
-> - [ ] diagrams/decoder-arch-mapping.png
-> - [ ] plots/throughput-by-model.png
-> - [ ] plots/kernel_profile_pre_softmax.png
-> - [ ] plots/cuda_kernels_time_distribution.png
-> - [ ] plots/speedup-ratio.png
-> - [ ] plots/time_to_generate_tokens.png
-> - [ ] plots/time-per-output-token.png
-> - [ ] videos/gpu_run.mp4
-> - [ ] videos/cpu_run.mp4
-
----
-
 ## Intro
 
 In the previous articles I built GPT-2 inference from scratch in C — first an unoptimized CPU implementation, then a KV-cache version that gave it 10× faster generation. This article picks up the next step: moving the entire pipeline to GPU and seeing how much further it can go. Spoiler: another 9× on top.

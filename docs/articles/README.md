@@ -8,7 +8,7 @@ Long-form writing about this project. Each article folder contains its own `arti
 |---|---|---|---|---|
 | 2025-06-08 | [building-gpt2-with-kv-cache](2025-06-building-gpt2-with-kv-cache/article.md) | Building GPT-2 in C — now with KV-Cache and 10x faster inference | published | [link](https://rbenhayun.substack.com/p/building-gpt-2-small-in-c-a-from) |
 | 2026-03-09 | [cublas-vs-openblas-matmul](2026-03-cublas-vs-openblas-matmul/article.md) | cuBLAS vs OpenBLAS: Benchmarking Matrix Multiply for GPT-2 | published | [link](https://rbenhayun.substack.com/p/2d-dot-product-using-gpu-and-cpu) |
-| 2026-04 | [gpu-inference](2026-04-gpu-inference/article.md) | GPT-2 in C — now on GPU with 9× faster inference | drafting | — |
+| 2026-04-26 | [gpu-inference](2026-04-gpu-inference/article.md) | GPT-2 in C — now on GPU with 9× faster inference | published | [link](https://rbenhayun.substack.com/p/gpt-2-in-c-now-on-gpu-with-9-faster) |
 
 ## Conventions
 

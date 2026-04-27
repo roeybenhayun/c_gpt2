@@ -172,11 +172,14 @@ python scripts/performance_analysis.py --cpu    # CPU-only
 ├── pyproject.toml                  # Python dependencies (uv)
 ├── tokenizer.py                    # Tokenizer server
 ├── extract_weights.py              # Weight extraction from HuggingFace
+├── TODO.md                         # Performance optimization tracker
 ├── cuda/                           # CUDA kernel source files
 ├── include/                        # Headers (cuda_kernels.h, model_config.h)
-├── scripts/                        # Automation and performance analysis
+├── scripts/                        # Automation, performance analysis, plot/table renderers
 ├── weights/                        # Model weights
 ├── logs/                           # JSON logs and nsys profile reports
+├── docs/
+│   └── articles/                   # Long-form articles, one folder per article with its own assets/
 ├── out/
 │   ├── cpu/                        # CPU binaries
 │   └── gpu/                        # GPU binaries + CUDA object files
