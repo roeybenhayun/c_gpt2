@@ -99,6 +99,19 @@ make gpu large      # GPT-2 Large (774M)
 make gpu            # All targets
 ```
 
+### GPU Half-Precision Builds (BF16 / FP16)
+
+The same source compiles to FP32 (default), BF16, or FP16 storage via Makefile flags. Compute stays in FP32 (FP32 accumulator) regardless of input dtype — only the in-memory weight/activation representation changes. Each dtype lands in its own output subdirectory so stale FP32 `.o` files can never link into a BF16 binary.
+
+```bash
+make gpu bf16 small      # BF16 build  → out/gpu/bf16/gpt2_small
+make gpu fp16 medium     # FP16 build  → out/gpu/fp16/gpt2_medium
+```
+
+The `bf16` and `fp16` flags only apply to GPU builds; using them without `gpu` will fail with a clear error (the CPU path goes through `cblas_sgemm`, which has no half-precision form).
+
+The on-disk weight `.bin` is FP32 in every build — the loader converts to the build's storage dtype on the fly, so the same weight file works for all three.
+
 ### Cleaning
 
 ```bash
@@ -126,39 +139,96 @@ Interactive mode:
 ./out/cpu/gpt2_small
 ```
 
-GPU inference:
+GPU inference (FP32):
 ```bash
 ./out/gpu/gpt2_small --prompt "Once upon a time..."
+```
+
+GPU inference (BF16 / FP16):
+```bash
+./out/gpu/bf16/gpt2_small --prompt "Once upon a time..."
+./out/gpu/fp16/gpt2_small --prompt "Once upon a time..."
 ```
 
 ---
 
 ## Running Performance Tests
 
+The runner builds the requested binaries, then runs each model with a fixed workload and writes a per-run JSON log under `logs/`.
+
+### Runner flags
+
 ```bash
-./scripts/run.sh                        # All models, CPU + GPU
-./scripts/run.sh small                  # Specific model
-./scripts/run.sh --gpu                  # GPU only
-./scripts/run.sh --cpu                  # CPU only
-./scripts/run.sh --gpu --profile small  # GPU with nsys profiling
+./scripts/run.sh                        # All models, CPU + GPU FP32 + GPU BF16, default workload
+./scripts/run.sh small                  # Specific model size
+./scripts/run.sh --cpu                  # CPU FP32 only
+./scripts/run.sh --gpu                  # GPU FP32 only
+./scripts/run.sh --bf16                 # GPU BF16 only
+./scripts/run.sh --gpu --bf16 large     # GPU FP32 and BF16, Large only
+./scripts/run.sh --gpu --profile small  # GPU FP32 with nsys profiling
 ```
+
+### Workload presets
+
+The runner has three baked-in workload shapes that exercise the model's two execution regimes (prefill and decode) in different proportions. Presets are mutually exclusive; the default is `--decode`.
+
+| Preset       | Prompt              | Output tokens | Phase mix          | Effective `M`              |
+|--------------|---------------------|---------------|--------------------|----------------------------|
+| `--decode`   | ~13 tokens (built-in) | 768          | ~99% decode        | 1                          |
+| `--prefill`  | ~1000 tokens (`scripts/prompts/long_prompt.txt`) | 32 | prefill-dominated | ~1000 prefill / 1 decode   |
+| `--balanced` | ~200 tokens (same file) | 200       | roughly 50/50      | ~200 prefill / 1 decode    |
+
+```bash
+./scripts/run.sh --gpu --bf16 --prefill   # Long-prompt run, GPU FP32 + BF16
+./scripts/run.sh --gpu --bf16 --balanced  # Mixed-shape run
+```
+
+The preset is embedded in every output JSON filename (`gpt2_<size>_<tag>_<preset>_…json`) so the analyzer can render one regime at a time.
+
+### Workload overrides
+
+For ad-hoc testing without a preset:
+
+```bash
+./scripts/run.sh --gpu --bf16 --prompt-file my_prompt.txt --out-tokens 64 large
+```
+
+`--prompt-file` and `--out-tokens` override whatever the preset would have set.
 
 ### Analysing Results
 
-Using `uv run` (no activation needed):
+The analyzer renders four plots (overlay, speedup, TPOT, TPS bar) and prints a summary table. Series flags select which runners to include; preset flags filter logs by workload shape and tag the chart titles.
+
 ```bash
-uv run python scripts/performance_analysis.py          # All results
-uv run python scripts/performance_analysis.py --gpu    # GPU-only
-uv run python scripts/performance_analysis.py --cpu    # CPU-only
+uv run python scripts/performance_analysis.py                       # All series, all presets (latest of each)
+uv run python scripts/performance_analysis.py --gpu --bf16          # GPU FP32 vs BF16
+uv run python scripts/performance_analysis.py --gpu --bf16 --prefill # …filtered to the prefill preset, title gets "PREFILL preset" suffix
+uv run python scripts/performance_analysis.py --cpu --gpu --bf16 --balanced
 ```
 
-Or activate the virtual environment first:
+Series flags: `--cpu`, `--gpu`, `--bf16`. Preset flags: `--decode`, `--prefill`, `--balanced` (mutually exclusive).
+
+### Long-prompt prefill sweep
+
+For sweeping prompt length and measuring TTFT (pure prefill time) directly:
+
 ```bash
-source .venv/bin/activate
-python scripts/performance_analysis.py          # All results
-python scripts/performance_analysis.py --gpu    # GPU-only
-python scripts/performance_analysis.py --cpu    # CPU-only
+./scripts/prefill_sweep.sh                       # Large, default sizes
+./scripts/prefill_sweep.sh --profile             # Same, plus nsys at the largest size
+./scripts/prefill_sweep.sh medium                # Different model
 ```
+
+Produces a side-by-side FP32 vs BF16 TTFT table at increasing prompt lengths.
+
+### Comparing nsys profiles
+
+After two profiled runs (FP32 and BF16, or before-and-after a code change), compare per-kernel time:
+
+```bash
+uv run python scripts/compare_profiles.py <baseline.nsys-rep> <target.nsys-rep>
+```
+
+Prints a kernel-family-bucketed table with `baseline | target | ratio | Δ time`, plus a total. Kernels with dtype-templated names (e.g. `softmax_kernel(float *, ...)` vs `softmax_kernel(__nv_bfloat16 *, ...)`) collapse into the same row.
 
 ---
 
@@ -175,14 +245,21 @@ python scripts/performance_analysis.py --cpu    # CPU-only
 ├── TODO.md                         # Performance optimization tracker
 ├── cuda/                           # CUDA kernel source files
 ├── include/                        # Headers (cuda_kernels.h, model_config.h)
-├── scripts/                        # Automation, performance analysis, plot/table renderers
+├── scripts/
+│   ├── run.sh                      # End-to-end build + run + log
+│   ├── prefill_sweep.sh            # TTFT sweep at varying prompt lengths
+│   ├── performance_analysis.py     # Plots + summary tables from JSON logs
+│   ├── compare_profiles.py         # nsys-rep diff (per-kernel time)
+│   └── prompts/                    # Reusable prompt fixtures (long_prompt.txt)
 ├── weights/                        # Model weights
 ├── logs/                           # JSON logs and nsys profile reports
 ├── docs/
 │   └── articles/                   # Long-form articles, one folder per article with its own assets/
 ├── out/
 │   ├── cpu/                        # CPU binaries
-│   └── gpu/                        # GPU binaries + CUDA object files
+│   └── gpu/                        # GPU FP32 binaries + CUDA object files
+│       ├── bf16/                   # GPU BF16 binaries (built with `make gpu bf16 …`)
+│       └── fp16/                   # GPU FP16 binaries (built with `make gpu fp16 …`)
 └── transformers/
     └── models/                     # HuggingFace model files (optional)
 ```

@@ -5,10 +5,10 @@
 
 #include "../include/cuda_kernels.h"
 
-__global__ void embedding_kernel(float (*wte_d)[d_model],
-                                 float (*wpe_d)[d_model],
+__global__ void embedding_kernel(weight_t (*wte_d)[d_model],
+                                 weight_t (*wpe_d)[d_model],
                                  int *token_d,
-                                 float (*embeddings_d)[d_model],
+                                 act_t (*embeddings_d)[d_model],
                                  int start_row,
                                  int n_rows) {
 
@@ -18,17 +18,18 @@ __global__ void embedding_kernel(float (*wte_d)[d_model],
     if (local_row < n_rows && col < d_model) {
         int row = start_row + local_row;
         int token_id = token_d[row];
-        embeddings_d[row][col] = wte_d[token_id][col] + wpe_d[row][col];
+        float sum = to_float(wte_d[token_id][col]) + to_float(wpe_d[row][col]);
+        embeddings_d[row][col] = to_act(sum);
     }
 
 }
 
 
 //TODO - take those fixes and add them to the embedding benchmarks which I will do in the future.
-extern "C" void embeddings_cuda(float (*wte_d)[d_model],
-                                     float (*wpe_d)[d_model],
+extern "C" void embeddings_cuda(weight_t (*wte_d)[d_model],
+                                     weight_t (*wpe_d)[d_model],
                                      int *token_d,
-                                     float (*embeddings_d)[d_model],
+                                     act_t (*embeddings_d)[d_model],
                                      int start_row,
                                      int n_rows) {
     dim3 threadsPerBlock;

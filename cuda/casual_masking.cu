@@ -3,18 +3,19 @@
 #include <cuda_runtime.h>
 #include "../include/cuda_kernels.h"
 
-__global__ void casual_masking_kernel(float *in, int stride, int tokens) {
+__global__ void casual_masking_kernel(act_t *in, int stride, int tokens) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < tokens) {
-        float *row_ptr = in + i * stride;
+        act_t *row_ptr = in + i * stride;
+        const act_t neg_inf = to_act(-INFINITY);
         for (int j = i+1; j < tokens ; j++) {
-            row_ptr[j] = -INFINITY;
+            row_ptr[j] = neg_inf;
         }
     }
 }
 
 
-extern "C" void casual_masking_cuda(float *in,
+extern "C" void casual_masking_cuda(act_t *in,
                                      int stride,
                                      int tokens) {
     dim3 threadsPerBlock;

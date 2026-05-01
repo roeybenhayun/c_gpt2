@@ -34,3 +34,53 @@
 
 #define head_dim (d_model / nof_heads)
 #define d_ff (d_model * 4)
+
+#if defined(USE_BF16)
+    #ifdef __CUDACC__
+        #include <cuda_bf16.h>
+        typedef __nv_bfloat16 act_t;
+        typedef __nv_bfloat16 weight_t;
+    #else
+        typedef __bf16 act_t;
+        typedef __bf16 weight_t;
+    #endif
+    #define DTYPE_NAME "bf16"
+#elif defined(USE_FP16)
+    #ifdef __CUDACC__
+        #include <cuda_fp16.h>
+        typedef __half act_t;
+        typedef __half weight_t;
+    #else
+        typedef _Float16 act_t;
+        typedef _Float16 weight_t;
+    #endif
+    #define DTYPE_NAME "fp16"
+#else
+    typedef float act_t;
+    typedef float weight_t;
+    #define DTYPE_NAME "fp32"
+#endif
+
+// Device-side narrow<->float helpers. In FP32 builds these are identity
+// and inline to nothing; in BF16/FP16 builds they emit a single conversion
+// instruction. Use them on every global-memory read/write inside kernels.
+#ifdef __CUDACC__
+__device__ __forceinline__ float to_float(act_t x) {
+#if defined(USE_BF16)
+    return __bfloat162float(x);
+#elif defined(USE_FP16)
+    return __half2float(x);
+#else
+    return x;
+#endif
+}
+__device__ __forceinline__ act_t to_act(float x) {
+#if defined(USE_BF16)
+    return __float2bfloat16(x);
+#elif defined(USE_FP16)
+    return __float2half(x);
+#else
+    return x;
+#endif
+}
+#endif

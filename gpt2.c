@@ -26,7 +26,6 @@
 
 #define SERVER_PORT 65432
 #define SERVER_IP "127.0.0.1"
-#define BUF_SIZE 4096
 
 #include "include/model_config.h"
 
@@ -68,30 +67,30 @@ do {                                                                       \
 #define APPLY_ATTENTION_SCALING (1)
 #define PI (3.14159265358979323846)
 
-static void print_2d_tensor(char* name, float *a, int a_r_full_dim, int a_c_full_dim, int r_idx_to_print, int c_idx_to_print, int enable);
-static float mean_(float *x, int len);
-static float variance_(float *x,int len, float mean);
-static void softmax_2d(float *a, int a_r, int a_c, int stride, float * c_out);
-static void dot_2d(float *a, // Matrix A (input)
+static void print_2d_tensor(char* name, act_t *a, int a_r_full_dim, int a_c_full_dim, int r_idx_to_print, int c_idx_to_print, int enable);
+static float mean_(act_t *x, int len);
+static float variance_(act_t *x,int len, float mean);
+static void softmax_2d(act_t *a, int a_r, int a_c, int stride, act_t * c_out);
+static void dot_2d(act_t *a, // Matrix A (input)
             int a_r, // a rows
             int a_c, // a column
             int lda, // leading dim a
-            float*b, // Matrix B (input)
+            act_t *b, // Matrix B (input)
             int b_r, // b rows
             int b_c, // b columns
             int ldb, // leading dim b
-            float* c_out, // Matrix C (output)
+            act_t * c_out, // Matrix C (output)
             int c_r, // c rows
             int c_c, // c columns
             int ldc, // stride c
-            int transpose_b, // 
-            int apply_attention_scaling 
+            int transpose_b, //
+            int apply_attention_scaling
         );
-static void transpose_2d(float *a, int a_r, int a_c, float*b);
-static void layernorm_2d(float *a, int a_r, int a_c,float * ln_gamma, float * ln_beta,float * out, float epsilon);
+static void transpose_2d(act_t *a, int a_r, int a_c, act_t *b);
+static void layernorm_2d(act_t *a, int a_r, int a_c, weight_t * ln_gamma, weight_t * ln_beta, act_t * out, float epsilon);
 static float gelu(float x);
-static void gelu_2d(float *a,int a_c, int a_r, float *out);
-static void apply_casual_masking(float * a, int a_c,int size);
+static void gelu_2d(act_t *a,int a_c, int a_r, act_t *out);
+static void apply_casual_masking(act_t * a, int a_c,int size);
 
 
 typedef struct {
@@ -129,8 +128,8 @@ int compareTokenProbs(const void *a, const void *b) {
  * @param top_k_probs_out     Output array to store the renormalized probabilities of the top K tokens.
  * Must be pre-allocated by the caller to a size of at least 'k'.
  */
-void top_k_sample(float *probs, int v_size, int k,
-                  int *top_k_indices_out, float *top_k_probs_out) {
+void top_k_sample(act_t *probs, int v_size, int k,
+                  int *top_k_indices_out, act_t *top_k_probs_out) {
 
     // Ensure k is within a valid range. If k is too large, it defaults to multinomial sampling.
     if (k <= 0 || k > v_size) {
@@ -182,7 +181,7 @@ void top_k_sample(float *probs, int v_size, int k,
 }
 
 #if 0
-static void add_tensor_to_layer(json_t *layer_obj, const char *tensor_name, float *a, int a_r, int a_c, int r_idx, int c_idx) {
+static void add_tensor_to_layer(json_t *layer_obj, const char *tensor_name, act_t *a, int a_r, int a_c, int r_idx, int c_idx) {
     json_t *tensor_array = json_array();
     for (int i = 0; i < r_idx; i++) {
         json_t *row = json_array();
@@ -197,7 +196,7 @@ static void add_tensor_to_layer(json_t *layer_obj, const char *tensor_name, floa
 #endif
 
 
-static void send_json_to_tokenizer(const char *json_str, char *response_buf) {
+static void send_json_to_tokenizer(const char *json_str, char *response_buf, size_t buf_size) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         perror("Socket creation failed");
@@ -217,19 +216,27 @@ static void send_json_to_tokenizer(const char *json_str, char *response_buf) {
 
     send(sock, json_str, strlen(json_str), 0);
 
-    int len = recv(sock, response_buf, BUF_SIZE - 1, 0);
-    if (len < 0) {
-        perror("Receive failed");
-        close(sock);
-        exit(1);
+    // Read in a loop until the peer closes the connection or the buffer fills.
+    // Single-recv was capped at 4 KB, which truncated long token lists (~960
+    // tokens easily exceeds 4 KB) and produced unparseable responses.
+    size_t total = 0;
+    while (total + 1 < buf_size) {
+        int len = recv(sock, response_buf + total, buf_size - 1 - total, 0);
+        if (len < 0) {
+            perror("Receive failed");
+            close(sock);
+            exit(1);
+        }
+        if (len == 0) break;  // peer closed
+        total += len;
     }
-    response_buf[len] = '\0';
+    response_buf[total] = '\0';
 
     close(sock);
 }
 
 
-static void softmax_2d(float *a, int a_r, int a_c,int stride, float * c_out){    
+static void softmax_2d(act_t *a, int a_r, int a_c,int stride, act_t * c_out){
     for (int i=0; i<a_r; i++){
         // 1. Find the maximum value in the current row
         float row_max = -INFINITY;
@@ -273,7 +280,18 @@ static cublasHandle_t get_cublas_handle() {
 }
 
 
-static void dot_2d_gpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,int ldb, float* c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
+// Input/output dtype for the GEMM. Compute type is always FP32
+// (FP32 accumulator) regardless of build, matching the standard
+// inference recipe.
+#if defined(USE_BF16)
+    #define GEMM_DATA_TYPE CUDA_R_16BF
+#elif defined(USE_FP16)
+    #define GEMM_DATA_TYPE CUDA_R_16F
+#else
+    #define GEMM_DATA_TYPE CUDA_R_32F
+#endif
+
+static void dot_2d_gpu(act_t *a,int a_r, int a_c, int lda, act_t *b,int b_r,int b_c,int ldb, act_t * c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
     // NOTE: Assumes 'a', 'b', and 'c_out' are pointers to GPU memory.
     cublasHandle_t handle = get_cublas_handle();
 
@@ -290,12 +308,19 @@ static void dot_2d_gpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b
     const cublasOperation_t opB = transpose_b ? CUBLAS_OP_T : CUBLAS_OP_N;
     const cublasOperation_t opA = CUBLAS_OP_N;
 
-    cublasStatus_t stat = cublasSgemm(handle, opB, opA, N, M, K, &alpha,
-                                      b, ldb, a, lda, &beta, c_out, ldc);
+    cublasStatus_t stat = cublasGemmEx(
+        handle, opB, opA, N, M, K,
+        &alpha,
+        b, GEMM_DATA_TYPE, ldb,
+        a, GEMM_DATA_TYPE, lda,
+        &beta,
+        c_out, GEMM_DATA_TYPE, ldc,
+        CUBLAS_COMPUTE_32F,
+        CUBLAS_GEMM_DEFAULT);
 
     if (stat != CUBLAS_STATUS_SUCCESS) {
         fprintf(stderr,
-            "FATAL: cublasSgemm failed with status %d\n"
+            "FATAL: cublasGemmEx failed with status %d\n"
             "  dims: a[%d x %d] lda=%d  b[%d x %d] ldb=%d  c[%d x %d] ldc=%d  trans_b=%d\n"
             "  cublas: M=%d N=%d K=%d\n",
             stat, a_r, a_c, lda, b_r, b_c, ldb, c_r, c_c, ldc, transpose_b, M, N, K);
@@ -329,7 +354,7 @@ static void print_gpu_memory_usage() {
 #endif
 
 #if defined (USE_ACCELERATE) || ( defined  (USE_ACCELERATE_X86) &&  !defined (USE_CUDA))
-static void dot_2d_cpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,int ldb, float* c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
+static void dot_2d_cpu(act_t *a,int a_r, int a_c, int lda, act_t *b,int b_r,int b_c,int ldb, act_t * c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
 
     float alpha = 1.0f;
     if (apply_attention_scaling) {
@@ -367,7 +392,7 @@ static void dot_2d_cpu(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b
 }
 #endif
 
-static void dot_2d(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,int ldb, float* c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
+static void dot_2d(act_t *a,int a_r, int a_c, int lda, act_t *b,int b_r,int b_c,int ldb, act_t * c_out,int c_r, int c_c, int ldc, int transpose_b,int apply_attention_scaling ){
 
 #ifdef USE_CUDA
     dot_2d_gpu(a,a_r, a_c, lda, b, b_r, b_c, ldb,  c_out, c_r,  c_c,  ldc,  transpose_b, apply_attention_scaling);
@@ -380,7 +405,7 @@ static void dot_2d(float *a,int a_r, int a_c, int lda, float*b,int b_r,int b_c,i
 }
 
 
-static void apply_casual_masking(float * a, int a_c, int size){
+static void apply_casual_masking(act_t * a, int a_c, int size){
     for (int i = 0; i < size; i++) {
         for (int j = i + 1; j < size; j++) {
             a[i * a_c + j] = -INFINITY;
@@ -389,7 +414,7 @@ static void apply_casual_masking(float * a, int a_c, int size){
 }
 
 //prints start from 0 both for row and column
-static void print_2d_tensor(char* name, float *a, int a_r_full_dim, int a_c_full_dim, int r_idx_to_print, int c_idx_to_print, int enable) {
+static void print_2d_tensor(char* name, act_t *a, int a_r_full_dim, int a_c_full_dim, int r_idx_to_print, int c_idx_to_print, int enable) {
     if (!enable) {
         return;
     }
@@ -400,7 +425,7 @@ static void print_2d_tensor(char* name, float *a, int a_r_full_dim, int a_c_full
         printf("  [");
         for (int j = 0; j < c_idx_to_print; j++) { // Loop for columns to print
             // Access element using the *full physical column dimension* (a_c_full_dim) as the stride
-            printf(" %6.4f", *(a + i * a_c_full_dim + j));
+            printf(" %6.4f", (double)*(a + i * a_c_full_dim + j));
             if (j < c_idx_to_print - 1) printf(", ");
         }
         printf("]");
@@ -411,7 +436,7 @@ static void print_2d_tensor(char* name, float *a, int a_r_full_dim, int a_c_full
 }
 
 
-static void transpose_2d(float *a, int a_r, int a_c, float*b){
+static void transpose_2d(act_t *a, int a_r, int a_c, act_t *b){
 // TODO input check
     for (int i=0; i<a_r; i++){
         for (int j=0; j<a_c; j++){
@@ -420,12 +445,12 @@ static void transpose_2d(float *a, int a_r, int a_c, float*b){
     }
 }
 
-static void layernorm_2d(float *a, int a_r, int a_c, 
-                    float * ln_gamma, float * ln_beta,
-                    float * out, float epsilon){
-    
+static void layernorm_2d(act_t *a, int a_r, int a_c,
+                    weight_t * ln_gamma, weight_t * ln_beta,
+                    act_t * out, float epsilon){
+
     for (int i=0; i < a_r; i++){
-        float *row = a + i * a_c;
+        act_t *row = a + i * a_c;
         float mean = mean_(row,a_c);
         float var = variance_(row,a_c,mean);
         for (int j=0; j<a_c; j++){
@@ -434,7 +459,7 @@ static void layernorm_2d(float *a, int a_r, int a_c,
     }
 }
 
-static void add_2d(float *a, int a_r, int a_c, float *b, float *out){
+static void add_2d(act_t *a, int a_r, int a_c, act_t *b, act_t *out){
     for (int i=0; i<a_r; i++){
         for (int j=0; j<a_c; j++){
             *(out +i*a_c + j) = *(a +i*a_c + j) + *(b +i*a_c + j);
@@ -442,12 +467,12 @@ static void add_2d(float *a, int a_r, int a_c, float *b, float *out){
     }
 }
 
-// if out is null addition is inplace 
-static void add_bias_2d(float *a, int a_r, int a_c, float *b, float *out){
-    float * tmp = out;
+// if out is null addition is inplace
+static void add_bias_2d(act_t *a, int a_r, int a_c, weight_t *b, act_t *out){
+    act_t * tmp = out;
     if (out == NULL){ //inplace
         tmp = a;
-    } 
+    }
     for (int i=0; i<a_r; i++){
         for (int j=0; j<a_c; j++){
             *(tmp +i*a_c + j) = *(a +i*a_c + j) + *(b + j);
@@ -455,14 +480,14 @@ static void add_bias_2d(float *a, int a_r, int a_c, float *b, float *out){
     }
 }
 
-static float mean_(float *x, int len){
+static float mean_(act_t *x, int len){
     float sum = 0.0;
     for (int i=0; i<len; i++){
         sum += *(x+i);
     }
     return (sum/(float)len);
 }
-static float variance_(float *x,int len, float mean){
+static float variance_(act_t *x,int len, float mean){
     float sum = 0.0;
     for (int i=0; i<len; i++){
         sum += pow(((*(x+i)) - mean),2);
@@ -475,8 +500,8 @@ static float gelu(float x){
     return 0.5 * x * (1 + tanh (term * (x + 0.044715*pow(x,3))));
 }
 
-static void gelu_2d(float *a,int a_c, int a_r, float *out){
-    float * tmp = out;
+static void gelu_2d(act_t *a,int a_c, int a_r, act_t *out){
+    act_t * tmp = out;
     if (out == NULL){ //inplace
         tmp = a;
     } 
@@ -501,169 +526,169 @@ int kv_cache_enabled = 0;
 
 const float eps = 0.00001;
 
-float wte[vocab_size][d_model] = {};
-float wte_T[d_model][vocab_size] = {};
+weight_t wte[vocab_size][d_model] = {};
+weight_t wte_T[d_model][vocab_size] = {};
 
-float wpe[ctx_len][d_model] = {};
-float embeddings[ctx_len][d_model] = {}; // for now post positional embeddings. This would go into layer norm
+weight_t wpe[ctx_len][d_model] = {};
+act_t embeddings[ctx_len][d_model] = {}; // for now post positional embeddings. This would go into layer norm
 
-float X_norm[ctx_len][d_model] = {};
-float X_norm2[ctx_len][d_model] = {};
+act_t X_norm[ctx_len][d_model] = {};
+act_t X_norm2[ctx_len][d_model] = {};
 
 
-float X1[ctx_len][d_ff] = {};
-float X1_out[ctx_len][d_ff] = {};
-float X2[ctx_len][d_model] = {};
-float X2_out[ctx_len][d_model] = {};
-float Xf_out[ctx_len][d_model] = {};
+act_t X1[ctx_len][d_ff] = {};
+act_t X1_out[ctx_len][d_ff] = {};
+act_t X2[ctx_len][d_model] = {};
+act_t X2_out[ctx_len][d_model] = {};
+act_t Xf_out[ctx_len][d_model] = {};
 
 /***  Attention (per-layer) ***/
-float (*W_q)[d_model][d_model];// 
-float (*W_k)[d_model][d_model]; 
-float (*W_v)[d_model][d_model];
-float (*b_q)[d_model];
-float (*b_k)[d_model];
-float (*b_v)[d_model];
+weight_t (*W_q)[d_model][d_model];//
+weight_t (*W_k)[d_model][d_model];
+weight_t (*W_v)[d_model][d_model];
+weight_t (*b_q)[d_model];
+weight_t (*b_k)[d_model];
+weight_t (*b_v)[d_model];
 
 /* Output projections */
-float (*attn_proj_weight)[d_model][d_model];
-float (*attn_proj_bias)[d_model];
+weight_t (*attn_proj_weight)[d_model][d_model];
+weight_t (*attn_proj_bias)[d_model];
 
 /* Feed Forward */
-float (*W1)[d_ff][d_model];
-float (*b1)[d_ff];
-float (*W2)[d_model][d_ff];
-float (*b2)[d_model];
+weight_t (*W1)[d_ff][d_model];
+weight_t (*b1)[d_ff];
+weight_t (*W2)[d_model][d_ff];
+weight_t (*b2)[d_model];
 
 /* Layer Norm */
-float (*layer_norm1_gamma)[d_model];
-float (*layer_norm1_beta)[d_model];
-float (*layer_norm2_gamma)[d_model];
-float (*layer_norm2_beta)[d_model];  
+weight_t (*layer_norm1_gamma)[d_model];
+weight_t (*layer_norm1_beta)[d_model];
+weight_t (*layer_norm2_gamma)[d_model];
+weight_t (*layer_norm2_beta)[d_model];
 
 #ifdef USE_CUDA
 int *tokens_d;
-float (*embeddings_d)[d_model];
-float (*X_norm_d)[d_model];
-float (*X_norm2_d)[d_model];
-float (*residual_out_d)[d_model];
-float (*residual2_out_d)[d_model];
+act_t (*embeddings_d)[d_model];
+act_t (*X_norm_d)[d_model];
+act_t (*X_norm2_d)[d_model];
+act_t (*residual_out_d)[d_model];
+act_t (*residual2_out_d)[d_model];
 
 /***  Global weights ***/
-float (*wte_d)[d_model];
-float (*wte_T_d)[vocab_size];
-float (*wpe_d)[d_model];
+weight_t (*wte_d)[d_model];
+weight_t (*wte_T_d)[vocab_size];
+weight_t (*wpe_d)[d_model];
 
 /***  Attention (per-layer) ***/
-float (*W_q_d)[d_model][d_model];
-float (*W_k_d)[d_model][d_model]; 
-float (*W_v_d)[d_model][d_model];
-float (*b_q_d)[d_model];
-float (*b_k_d)[d_model];
-float (*b_v_d)[d_model];
+weight_t (*W_q_d)[d_model][d_model];
+weight_t (*W_k_d)[d_model][d_model];
+weight_t (*W_v_d)[d_model][d_model];
+weight_t (*b_q_d)[d_model];
+weight_t (*b_k_d)[d_model];
+weight_t (*b_v_d)[d_model];
 
 /* Output projections */
-float (*attn_proj_weight_d)[d_model][d_model];
-float (*attn_proj_bias_d)[d_model];
+weight_t (*attn_proj_weight_d)[d_model][d_model];
+weight_t (*attn_proj_bias_d)[d_model];
 
 /* Feed Forward */
-float (*W1_d)[d_ff][d_model];
-float (*b1_d)[d_ff];
-float (*W2_d)[d_model][d_ff];
-float (*b2_d)[d_model];
+weight_t (*W1_d)[d_ff][d_model];
+weight_t (*b1_d)[d_ff];
+weight_t (*W2_d)[d_model][d_ff];
+weight_t (*b2_d)[d_model];
 
 /* Layer Norm */
-float (*layer_norm1_gamma_d)[d_model];
-float (*layer_norm1_beta_d)[d_model];
-float (*layer_norm2_gamma_d)[d_model];
-float (*layer_norm2_beta_d)[d_model];  
+weight_t (*layer_norm1_gamma_d)[d_model];
+weight_t (*layer_norm1_beta_d)[d_model];
+weight_t (*layer_norm2_gamma_d)[d_model];
+weight_t (*layer_norm2_beta_d)[d_model];
 
-float *layer_normf_gamma_d;       // Final Layer Norm Gamma [d_model]
-float *layer_normf_beta_d;        // Final Layer Norm Beta [d_model]
+weight_t *layer_normf_gamma_d;       // Final Layer Norm Gamma [d_model]
+weight_t *layer_normf_beta_d;        // Final Layer Norm Beta [d_model]
 
-float (*K_cache_d)[ctx_len][d_model]; // Pointer to layers of [ctx_len][d_model]
-float (*V_cache_d)[ctx_len][d_model];
+act_t (*K_cache_d)[ctx_len][d_model]; // Pointer to layers of [ctx_len][d_model]
+act_t (*V_cache_d)[ctx_len][d_model];
 
-float (*Q_d)[d_model];
+act_t (*Q_d)[d_model];
 
-float (*scores_h_d)[ctx_len];
-float (*weights_h_d)[ctx_len];
+act_t (*scores_h_d)[ctx_len];
+act_t (*weights_h_d)[ctx_len];
 
-float (*context_d)[d_model];
+act_t (*context_d)[d_model];
 
 
-float (*X1_d)[d_ff];
-float (*X1_out_d)[d_ff];
-float (*X2_d)[d_model];
-float (*X2_out_d)[d_model];
-float (*Xf_out_d)[d_model];
+act_t (*X1_d)[d_ff];
+act_t (*X1_out_d)[d_ff];
+act_t (*X2_d)[d_model];
+act_t (*X2_out_d)[d_model];
+act_t (*Xf_out_d)[d_model];
 
-float (*final_attention_output_d)[d_model];
-float (*context_heads_d)[ctx_len][head_dim];
+act_t (*final_attention_output_d)[d_model];
+act_t (*context_heads_d)[ctx_len][head_dim];
 
-float (*logits_d)[vocab_size];
+act_t (*logits_d)[vocab_size];
 
 #endif
 
-float temp_attn_weight[3*d_model][d_model] = {}; // 2304 = 768 * 3
-float temp_attn_bias[3*d_model] = {};
+weight_t temp_attn_weight[3*d_model][d_model] = {}; // 2304 = 768 * 3
+weight_t temp_attn_bias[3*d_model] = {};
 
-float Q[ctx_len][d_model] = {};
-float K[ctx_len][d_model] = {};
-//float K_cache[ctx_len][d_model] = {};
-float K_cache[num_layers][ctx_len][d_model] = {};
+act_t Q[ctx_len][d_model] = {};
+act_t K[ctx_len][d_model] = {};
+//act_t K_cache[ctx_len][d_model] = {};
+act_t K_cache[num_layers][ctx_len][d_model] = {};
 
-float K_T[d_model][ctx_len] = {};
-float V[ctx_len][d_model] = {};
-//float V_cache[ctx_len][d_model] = {};
-float V_cache[num_layers][ctx_len][d_model] = {};
-float attention_scores[ctx_len][ctx_len] = {};
-float attention_scores_temp[ctx_len][ctx_len] = {};
-float attention_weights[ctx_len][ctx_len] = {};
-float context[ctx_len][d_model] = {};
+act_t K_T[d_model][ctx_len] = {};
+act_t V[ctx_len][d_model] = {};
+//act_t V_cache[ctx_len][d_model] = {};
+act_t V_cache[num_layers][ctx_len][d_model] = {};
+act_t attention_scores[ctx_len][ctx_len] = {};
+act_t attention_scores_temp[ctx_len][ctx_len] = {};
+act_t attention_weights[ctx_len][ctx_len] = {};
+act_t context[ctx_len][d_model] = {};
 
 
-float layer_normf_gamma[d_model] = {}; // default: no scaling
-float layer_normf_beta[d_model] = {};  // default: no shifting
+weight_t layer_normf_gamma[d_model] = {}; // default: no scaling
+weight_t layer_normf_beta[d_model] = {};  // default: no shifting
 
-float residual_out[ctx_len][d_model] = {};
-float residual2_out[ctx_len][d_model] = {};
+act_t residual_out[ctx_len][d_model] = {};
+act_t residual2_out[ctx_len][d_model] = {};
 
-float logits[ctx_len][vocab_size] = {};
+act_t logits[ctx_len][vocab_size] = {};
 
-float context_heads[nof_heads][ctx_len][head_dim] = {};
-float scores_h[ctx_len][ctx_len] = {};
-float weights_h[ctx_len][ctx_len] = {};
-float final_attention_output[ctx_len][d_model] = {}; 
+act_t context_heads[nof_heads][ctx_len][head_dim] = {};
+act_t scores_h[ctx_len][ctx_len] = {};
+act_t weights_h[ctx_len][ctx_len] = {};
+act_t final_attention_output[ctx_len][d_model] = {};
 
 
 typedef struct{
-    float * W_q;
-    float * W_k;
-    float * W_v;
-    float * b_q;
-    float * b_k;
-    float * b_v;
-    float *attn_proj_weight;
-    float *attn_proj_bias;
-    float * W1;
-    float * W2;
-    float * b1;
-    float * b2;
-    float *ln1_gamma;
-    float *ln1_beta;
-    float *ln2_gamma;
-    float *ln2_beta;
+    weight_t * W_q;
+    weight_t * W_k;
+    weight_t * W_v;
+    weight_t * b_q;
+    weight_t * b_k;
+    weight_t * b_v;
+    weight_t *attn_proj_weight;
+    weight_t *attn_proj_bias;
+    weight_t * W1;
+    weight_t * W2;
+    weight_t * b1;
+    weight_t * b2;
+    weight_t *ln1_gamma;
+    weight_t *ln1_beta;
+    weight_t *ln2_gamma;
+    weight_t *ln2_beta;
 
 }TransformerBlockParams;
 
 #ifdef USE_CUDA
-static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
+static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
                         TransformerBlockParams * tbp,json_t *json_root,int layer_id,int token_idx);
 #endif
 
 static TransformerBlockParams layer[num_layers];
-static void transformer_block_cpu(float *input,int n_tokens,int n_new_tokens,
+static void transformer_block_cpu(act_t *input,int n_tokens,int n_new_tokens,
                         TransformerBlockParams * tbp,json_t *json_root,int layer_id,int token_idx
                         );
 
@@ -691,8 +716,8 @@ static void allocate_weights_gpu(void){
     CUDA_CHECK(cudaMalloc((void **)&layer_norm2_gamma_d, num_layers * sizeof *layer_norm2_gamma_d));
     CUDA_CHECK(cudaMalloc((void **)&layer_norm2_beta_d, num_layers * sizeof *layer_norm2_beta_d));
 
-    CUDA_CHECK(cudaMalloc((void **)&layer_normf_gamma_d, d_model * sizeof(float)));
-    CUDA_CHECK(cudaMalloc((void **)&layer_normf_beta_d, d_model * sizeof(float)));
+    CUDA_CHECK(cudaMalloc((void **)&layer_normf_gamma_d, d_model * sizeof(weight_t)));
+    CUDA_CHECK(cudaMalloc((void **)&layer_normf_beta_d, d_model * sizeof(weight_t)));
     CUDA_CHECK(cudaMalloc((void **)&tokens_d, ctx_len * sizeof(int)));
     CUDA_CHECK(cudaMalloc((void **)&embeddings_d, ctx_len * sizeof *embeddings_d));
 
@@ -839,7 +864,7 @@ int glob_idx = 0;
 int last_index = 0; // for kv cache
 
 
-static void transformer_block(float *input,int n_tokens,int n_new_tokens,
+static void transformer_block(act_t *input,int n_tokens,int n_new_tokens,
                         TransformerBlockParams * tbp,json_t *json_root,int layer_id,int token_idx
                         )
 {
@@ -851,7 +876,7 @@ static void transformer_block(float *input,int n_tokens,int n_new_tokens,
 }
 
 #ifdef USE_CUDA
-static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
+static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
                         TransformerBlockParams * tbp,json_t *json_root,int layer_id,int token_idx
                         ){
     //char layer_key[32];
@@ -863,7 +888,7 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
     //printf("Input:\n");
     int cache_start_index = n_tokens - n_new_tokens;
 
-    layernorm_cuda((float (*)[d_model])(input + cache_start_index*d_model),n_new_tokens,d_model,tbp->ln1_gamma,tbp->ln1_beta, (float (*)[d_model])&X_norm_d[cache_start_index][0],eps);
+    layernorm_cuda((act_t (*)[d_model])(input + cache_start_index*d_model),n_new_tokens,d_model,tbp->ln1_gamma,tbp->ln1_beta, (act_t (*)[d_model])&X_norm_d[cache_start_index][0],eps);
 
     //print_2d_tensor("LN1 X_norm[1][:10]:",&X_norm[1][0],ctx_len,d_model,1,10,0);
 
@@ -876,11 +901,11 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
     add_bias_cuda(&Q_d[cache_start_index][0],n_new_tokens,d_model,tbp->b_q,NULL);
     // final destination pointer in the cache
     
-    float* k_cache_ptr = &K_cache_d[layer_id][cache_start_index][0];
+    act_t* k_cache_ptr = &K_cache_d[layer_id][cache_start_index][0];
     dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_k,d_model,d_model,d_model,k_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
     add_bias_cuda(k_cache_ptr,n_new_tokens,d_model,tbp->b_k,NULL);
-    
-    float* v_cache_ptr = &V_cache_d[layer_id][cache_start_index][0];
+
+    act_t* v_cache_ptr = &V_cache_d[layer_id][cache_start_index][0];
     dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_v,d_model,d_model,d_model,v_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
     add_bias_cuda(v_cache_ptr,n_new_tokens,d_model,tbp->b_v,NULL);
     
@@ -898,34 +923,38 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
     // step. Need to calc attention for the last token only during the generation 
     // phase. which means calc 1xn_tokens instead of n_tokens x n_tokens matrix
     for (int h=0 ; h < nof_heads; h++){
-        float *q_h;
-        float *k_h;
-        float *v_h;
-        float *context_h_out = &context_heads_d[h][0][0];
+        act_t *q_h;
+        act_t *k_h;
+        act_t *v_h;
+        act_t *context_h_out = &context_heads_d[h][0][0];
 
         k_h = &K_cache_d[layer_id][0][0]+ h * head_dim;
-        v_h = &V_cache_d[layer_id][0][0]+ h * head_dim;            
+        v_h = &V_cache_d[layer_id][0][0]+ h * head_dim;
 
         if(n_new_tokens == 1){
-            float* q_last_token_h = &Q_d[n_tokens - 1][0] + h * head_dim;
-            float* scores_last_row = &scores_h_d[n_tokens - 1][0]; 
-            float* weights_last_row = &weights_h_d[n_tokens - 1][0];
-            float* context_last_row = context_h_out + (n_tokens - 1) * head_dim;
+            act_t* q_last_token_h = &Q_d[n_tokens - 1][0] + h * head_dim;
+            act_t* scores_last_row = &scores_h_d[n_tokens - 1][0];
+            act_t* weights_last_row = &weights_h_d[n_tokens - 1][0];
+            act_t* context_last_row = context_h_out + (n_tokens - 1) * head_dim;
              // 1. Calculate scores: Q_last dot K_all -> [1 x head_dim] @ [head_dim x n_tokens] = [1 x n_tokens]
             dot_2d(q_last_token_h, 1, head_dim, d_model, k_h, n_tokens, head_dim, d_model, scores_last_row, 1, n_tokens, ctx_len, 1, APPLY_ATTENTION_SCALING);
             
             // Causal mask is implicit up to n_tokens-1, no need to apply for the last row.
-            // 2. Softmax on the single row of scores
-            softmax_cuda(scores_last_row, 1, n_tokens, ctx_len, weights_last_row,1.0f);
+            // 2. Softmax on the single row of scores (no causal mask: the single row attends to all prior tokens)
+            softmax_cuda(scores_last_row, 1, n_tokens, ctx_len, weights_last_row, 1.0f, /*causal_mask=*/0);
             // 3. Calculate context: Weights_last dot V_all -> [1 x n_tokens] @ [n_tokens x head_dim] = [1 x head_dim]
             dot_2d(weights_last_row, 1, n_tokens, ctx_len, v_h, n_tokens, head_dim, d_model, context_last_row, 1, head_dim, head_dim, 0, !APPLY_ATTENTION_SCALING);
         } else {
             // prefill
             q_h = &Q_d[0][0]+ h * head_dim;
             dot_2d(q_h,n_tokens,head_dim,d_model,k_h,n_tokens,head_dim,d_model,&scores_h_d[0][0],n_tokens,n_tokens,ctx_len,1,APPLY_ATTENTION_SCALING);
-            casual_masking_cuda(&scores_h_d[0][0],ctx_len/*n_tokens*/,n_tokens);
-            //print_2d_tensor("C scores_h[1][i] (before Softmax):",&scores_h[1][0],ctx_len,ctx_len,1,10,0);            
-            softmax_cuda(&scores_h_d[0][0], n_tokens,n_tokens,ctx_len, &weights_h_d[0][0],1.0f);        
+            // Causal masking is now folded into softmax_cuda below (see cuda/softmax.cu).
+            // The standalone kernel was dropped — it was the dominant BF16 prefill penalty
+            // (+100 ms on Large at 1024 tokens), and it ran 720× per token (per layer × per head)
+            // for a pattern that the softmax kernel can express with a single column-index check.
+            // casual_masking_cuda(&scores_h_d[0][0],ctx_len/*n_tokens*/,n_tokens);
+            //print_2d_tensor("C scores_h[1][i] (before Softmax):",&scores_h[1][0],ctx_len,ctx_len,1,10,0);
+            softmax_cuda(&scores_h_d[0][0], n_tokens,n_tokens,ctx_len, &weights_h_d[0][0], 1.0f, /*causal_mask=*/1);
             //print_2d_tensor("C weights_h[1][:10]",&weights_h[1][0],ctx_len,ctx_len,1,10,0);
             dot_2d(&weights_h_d[0][0],n_tokens,n_tokens,ctx_len,v_h,n_tokens,head_dim,d_model,context_h_out,n_tokens,head_dim,head_dim,0,!APPLY_ATTENTION_SCALING);
         }
@@ -956,7 +985,7 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
 
 
         // 4. Layer Norm 2 (on the last token only)
-        layernorm_cuda((float (*)[d_model])&residual_out_d[i][0],1,d_model,tbp->ln2_gamma,tbp->ln2_beta, (float (*)[d_model])&X_norm2_d[i][0],eps);
+        layernorm_cuda((act_t (*)[d_model])&residual_out_d[i][0],1,d_model,tbp->ln2_gamma,tbp->ln2_beta, (act_t (*)[d_model])&X_norm2_d[i][0],eps);
 
 
         // 5. MLP (on the last token only)
@@ -973,7 +1002,7 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
         // 6. Final Residual Connection (for the last token only)
         // First, preserve the state of previous tokens by copying them over
         if (i > 0) {
-            cudaMemcpy(&residual2_out_d[0][0], input, i * d_model * sizeof(float), cudaMemcpyDeviceToDevice);
+            cudaMemcpy(&residual2_out_d[0][0], input, i * d_model * sizeof(act_t), cudaMemcpyDeviceToDevice);
             //memcpy(&residual2_out[0][0], input, i * d_model * sizeof(float));
         }
         // Then, calculate the new residual for the last token /////CUDA is missing///
@@ -998,7 +1027,7 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
         add_2d_cuda(input,n_tokens,d_model,&context_d[0][0],&residual_out_d[0][0]);
 
         // 4. Layer Norm 2
-        layernorm_cuda((float (*)[d_model])&residual_out_d[0][0],n_tokens,d_model,tbp->ln2_gamma,tbp->ln2_beta,(float (*)[d_model])&X_norm2_d[0][0],eps);
+        layernorm_cuda((act_t (*)[d_model])&residual_out_d[0][0],n_tokens,d_model,tbp->ln2_gamma,tbp->ln2_beta,(act_t (*)[d_model])&X_norm2_d[0][0],eps);
 
         // 5. MLP
         dot_2d(&X_norm2_d[0][0],n_tokens,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out_d[0][0],n_tokens,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
@@ -1021,7 +1050,7 @@ static void transformer_block_gpu(float *input,int n_tokens,int n_new_tokens,
 #endif
 
 
-static void transformer_block_cpu(float *input,int n_tokens,int n_new_tokens,
+static void transformer_block_cpu(act_t *input,int n_tokens,int n_new_tokens,
                         TransformerBlockParams * tbp,json_t *json_root,int layer_id,int token_idx
                         ){
     
@@ -1047,12 +1076,12 @@ static void transformer_block_cpu(float *input,int n_tokens,int n_new_tokens,
         add_bias_2d(&Q[cache_start_index][0],n_new_tokens,d_model,tbp->b_q,NULL);
 
         // final destination pointer in the cache
-        float* k_cache_ptr = &K_cache[layer_id][cache_start_index][0];
+        act_t* k_cache_ptr = &K_cache[layer_id][cache_start_index][0];
         dot_2d(&X_norm[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_k,d_model,d_model,d_model,k_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
         add_bias_2d(k_cache_ptr,n_new_tokens,d_model,tbp->b_k,NULL);
         //memcpy(&K_cache[layer_id][cache_start_index][0],&K[0][0], n_new_tokens * d_model * sizeof(float));
 
-        float* v_cache_ptr = &V_cache[layer_id][cache_start_index][0];
+        act_t* v_cache_ptr = &V_cache[layer_id][cache_start_index][0];
         dot_2d(&X_norm[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_v,d_model,d_model,d_model,v_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
         add_bias_2d(v_cache_ptr,n_new_tokens,d_model,tbp->b_v,NULL);
         //memcpy(&V_cache[layer_id][cache_start_index][0],&V[0][0], n_new_tokens * d_model * sizeof(float));
@@ -1081,10 +1110,10 @@ static void transformer_block_cpu(float *input,int n_tokens,int n_new_tokens,
     // step. Need to calc attention for the last token only during the generation 
     // phase. which means calc 1xn_tokens instead of n_tokens x n_tokens matrix
     for (int h=0 ; h < nof_heads; h++){
-        float *q_h;
-        float *k_h;
-        float *v_h;
-        float *context_h_out = &context_heads[h][0][0];
+        act_t *q_h;
+        act_t *k_h;
+        act_t *v_h;
+        act_t *context_h_out = &context_heads[h][0][0];
 
         if (kv_cache_enabled){
             k_h = &K_cache[layer_id][0][0]+ h * head_dim;
@@ -1092,10 +1121,10 @@ static void transformer_block_cpu(float *input,int n_tokens,int n_new_tokens,
             //context_h_out = &context_heads[h][0][0];
 
             if(n_new_tokens == 1){
-                float* q_last_token_h = &Q[n_tokens - 1][0] + h * head_dim;
-                float* scores_last_row = &scores_h[n_tokens - 1][0]; 
-                float* weights_last_row = &weights_h[n_tokens - 1][0];
-                float* context_last_row = context_h_out + (n_tokens - 1) * head_dim;
+                act_t* q_last_token_h = &Q[n_tokens - 1][0] + h * head_dim;
+                act_t* scores_last_row = &scores_h[n_tokens - 1][0];
+                act_t* weights_last_row = &weights_h[n_tokens - 1][0];
+                act_t* context_last_row = context_h_out + (n_tokens - 1) * head_dim;
 
                  // 1. Calculate scores: Q_last dot K_all -> [1 x head_dim] @ [head_dim x n_tokens] = [1 x n_tokens]
                 dot_2d(q_last_token_h, 1, head_dim, d_model, k_h, n_tokens, head_dim, d_model, scores_last_row, 1, n_tokens, ctx_len, 1, APPLY_ATTENTION_SCALING);
@@ -1127,7 +1156,7 @@ static void transformer_block_cpu(float *input,int n_tokens,int n_new_tokens,
             //context_h_out = &context_heads[h][0][0];
 
             //Clear scores buffer to avoid stale values
-            memset(scores_h, 0, sizeof(float) * ctx_len * ctx_len);
+            memset(scores_h, 0, sizeof(act_t) * ctx_len * ctx_len);
 
             dot_2d(q_h,n_tokens,head_dim,d_model,k_h,n_tokens,head_dim,d_model,&scores_h[0][0],n_tokens,n_tokens,ctx_len,1,APPLY_ATTENTION_SCALING);
             apply_casual_masking(&scores_h[0][0],ctx_len/*n_tokens*/,n_tokens);
@@ -1145,7 +1174,7 @@ static void transformer_block_cpu(float *input,int n_tokens,int n_new_tokens,
             // 1. head concat (for the last token only)
             for (int h = 0; h < nof_heads; h++) {
                 // More efficient to copy the whole head's output for the token at once
-                memcpy(&final_attention_output[i][h * head_dim], &context_heads[h][i][0], head_dim * sizeof(float));
+                memcpy(&final_attention_output[i][h * head_dim], &context_heads[h][i][0], head_dim * sizeof(act_t));
             }
 
             // 2. Attention projection (on the last token only)
@@ -1174,7 +1203,7 @@ static void transformer_block_cpu(float *input,int n_tokens,int n_new_tokens,
             // 6. Final Residual Connection (for the last token only)
             // First, preserve the state of previous tokens by copying them over
             if (i > 0) {
-                memcpy(&residual2_out[0][0], input, i * d_model * sizeof(float));
+                memcpy(&residual2_out[0][0], input, i * d_model * sizeof(act_t));
             }
             // Then, calculate the new residual for the last token
             add_2d(&residual_out[i][0], 1, d_model, &X2_out[i][0], &residual2_out[i][0]);
@@ -1183,7 +1212,7 @@ static void transformer_block_cpu(float *input,int n_tokens,int n_new_tokens,
             // prefill phase or non cached path
             for (int i = 0; i < n_tokens; i++) {
                 for (int h = 0; h < nof_heads; h++) {
-                     memcpy(&final_attention_output[i][h * head_dim], &context_heads[h][i][0], head_dim * sizeof(float));
+                     memcpy(&final_attention_output[i][h * head_dim], &context_heads[h][i][0], head_dim * sizeof(act_t));
                 }            
             }
             // Attention projection 
@@ -1263,11 +1292,31 @@ static int parse_tokens(const char *json, int *tokens, int max_tokens) {
     return count; // number of tokens parsed
 }
 
-static void fread_or_exit(void *ptr, size_t size, size_t count, FILE *fp) {
-    if (fread(ptr, size, count, fp) != count) {
+// Read `count` FP32 elements from disk into a weight_t buffer, converting
+// element-by-element when the build dtype is narrower than FP32.
+// On-disk format is always FP32 — only the in-memory representation changes.
+static void fread_weights_or_exit(weight_t *dest, size_t count, FILE *fp) {
+#if defined(USE_BF16) || defined(USE_FP16)
+    static float chunk[4096];
+    const size_t N = sizeof(chunk) / sizeof(chunk[0]);
+    while (count > 0) {
+        size_t k = (count < N) ? count : N;
+        if (fread(chunk, sizeof(float), k, fp) != k) {
+            fprintf(stderr, "Error: fread failed or unexpected EOF.\n");
+            exit(1);
+        }
+        for (size_t i = 0; i < k; i++) {
+            dest[i] = (weight_t)chunk[i];
+        }
+        dest += k;
+        count -= k;
+    }
+#else
+    if (fread(dest, sizeof(weight_t), count, fp) != count) {
         fprintf(stderr, "Error: fread failed or unexpected EOF.\n");
         exit(1);
     }
+#endif
 }
 
 
@@ -1300,8 +1349,8 @@ static void copy_weights_to_gpu(void){
     CUDA_CHECK(cudaMemcpy(W2_d,  W2, num_layers * sizeof (*W2_d),cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(b2_d,  b2, num_layers * sizeof (*b2_d),cudaMemcpyHostToDevice));
 
-    CUDA_CHECK(cudaMemcpy(layer_normf_gamma_d, layer_normf_gamma, d_model * sizeof(float), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(layer_normf_beta_d, layer_normf_beta, d_model * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(layer_normf_gamma_d, layer_normf_gamma, d_model * sizeof(weight_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(layer_normf_beta_d, layer_normf_beta, d_model * sizeof(weight_t), cudaMemcpyHostToDevice));
 
     CUDA_CHECK(cudaDeviceSynchronize());
     
@@ -1310,15 +1359,15 @@ static void copy_weights_to_gpu(void){
 }
 
 static void load_all_weights(FILE* fp){
-    // token + position embeddings 
-    fread_or_exit(wte,sizeof(float),vocab_size*d_model,fp);    
-    fread_or_exit(wpe,sizeof(float),ctx_len*d_model,fp);
-    
+    // token + position embeddings
+    fread_weights_or_exit(&wte[0][0], (size_t)vocab_size*d_model, fp);
+    fread_weights_or_exit(&wpe[0][0], (size_t)ctx_len*d_model, fp);
+
     for (int l = 0; l < num_layers; l++){
-    
-        fread_or_exit(layer[l].ln1_gamma, sizeof(float), d_model, fp);//ln_1.weight (768)
-        fread_or_exit(layer[l].ln1_beta,  sizeof(float), d_model, fp);//ln_1.bias (768)
-        fread_or_exit(temp_attn_weight, sizeof(float), d_model * 3 * d_model, fp);
+
+        fread_weights_or_exit(layer[l].ln1_gamma, d_model, fp);//ln_1.weight
+        fread_weights_or_exit(layer[l].ln1_beta,  d_model, fp);//ln_1.bias
+        fread_weights_or_exit(&temp_attn_weight[0][0], (size_t)d_model * 3 * d_model, fp);
 
         for (int i = 0; i < d_model; i++) {
             for (int j = 0; j < d_model; j++) {
@@ -1327,26 +1376,26 @@ static void load_all_weights(FILE* fp){
                 layer[l].W_v[i * d_model + j] = temp_attn_weight[i + 2 * d_model][j]; // rows 1536–2303
             }
         }
-        fread_or_exit(temp_attn_bias, sizeof(float), 3*d_model, fp);
+        fread_weights_or_exit(temp_attn_bias, 3*d_model, fp);
         for (int i = 0; i < d_model; i++) {
             layer[l].b_q[i] = temp_attn_bias[i];
             layer[l].b_k[i] = temp_attn_bias[d_model + i];
             layer[l].b_v[i] = temp_attn_bias[2*d_model + i];
         }
-        fread_or_exit(layer[l].attn_proj_weight,  sizeof(float), d_model*d_model, fp);//attn.c_proj.weight
-        fread_or_exit(layer[l].attn_proj_bias,  sizeof(float), d_model, fp);//attn.c_proj.bias
-        
-        fread_or_exit(layer[l].ln2_gamma, sizeof(float), d_model, fp);//ln_2.weight
-        fread_or_exit(layer[l].ln2_beta,  sizeof(float), d_model, fp);//ln_2.bias
+        fread_weights_or_exit(layer[l].attn_proj_weight, (size_t)d_model*d_model, fp);//attn.c_proj.weight
+        fread_weights_or_exit(layer[l].attn_proj_bias,   d_model, fp);//attn.c_proj.bias
 
-        fread_or_exit(layer[l].W1, sizeof(float), d_model*d_ff, fp);//mlp.c_fc.weight
-        fread_or_exit(layer[l].b1, sizeof(float), d_ff, fp);//mlp.c_fc.bias
-        fread_or_exit(layer[l].W2, sizeof(float), d_ff*d_model, fp);//mlp.c_proj.weight
-        fread_or_exit(layer[l].b2, sizeof(float), d_model, fp);//mlp.c_proj.bias
+        fread_weights_or_exit(layer[l].ln2_gamma, d_model, fp);//ln_2.weight
+        fread_weights_or_exit(layer[l].ln2_beta,  d_model, fp);//ln_2.bias
+
+        fread_weights_or_exit(layer[l].W1, (size_t)d_model*d_ff, fp);//mlp.c_fc.weight
+        fread_weights_or_exit(layer[l].b1, d_ff, fp);//mlp.c_fc.bias
+        fread_weights_or_exit(layer[l].W2, (size_t)d_ff*d_model, fp);//mlp.c_proj.weight
+        fread_weights_or_exit(layer[l].b2, d_model, fp);//mlp.c_proj.bias
     }
     // final layer norm
-    fread_or_exit(layer_normf_gamma, sizeof(float), d_model, fp);
-    fread_or_exit(layer_normf_beta, sizeof(float), d_model, fp);
+    fread_weights_or_exit(layer_normf_gamma, d_model, fp);
+    fread_weights_or_exit(layer_normf_beta,  d_model, fp);
 
     //printf("before copying weights to the gpu\n");
     // no op if no GPU
@@ -1391,15 +1440,17 @@ static void load_layers_weights(TransformerBlockParams * p_tfb, int layer_id,FIL
 }
 #endif
 
-#define MAX_OUTPUT_TOKENS 1024 
+#define MAX_OUTPUT_TOKENS 1024
 #define CHARS_PER_TOKEN 7
 #define MAX_TOKEN_LIST_CHARS (MAX_OUTPUT_TOKENS * CHARS_PER_TOKEN + 10) // 1024 tokens, up to 6 digits + comma/space, plus buffer
-#define MAX_JSON_REQUEST_CHARS (MAX_TOKEN_LIST_CHARS + 64) // For "\{\"mode\": \"decode\", \"tokens\": []}" wrapper
+#define MAX_PROMPT_BYTES 8192 // input_buffer size — must match the declaration in main()
+// Sized to fit either the decode request (tokens->text) or the encode request (text->tokens)
+#define MAX_JSON_REQUEST_CHARS ((MAX_TOKEN_LIST_CHARS > MAX_PROMPT_BYTES ? MAX_TOKEN_LIST_CHARS : MAX_PROMPT_BYTES) + 64)
 
 int main(int argc, char *argv[])
 {
     const int n_tokens = 1024; // TODO:replace with ctx_len
-    char input_buffer[2048];    
+    char input_buffer[MAX_PROMPT_BYTES];
     char encode_request[MAX_JSON_REQUEST_CHARS];
     char encode_response[MAX_JSON_REQUEST_CHARS];
     char decode_request[MAX_JSON_REQUEST_CHARS];
@@ -1556,7 +1607,7 @@ int main(int argc, char *argv[])
         snprintf(encode_request, sizeof(encode_request),
          "{\"mode\": \"encode\", \"text\": \"%s\"}", input_buffer);
          // Get tokens
-        send_json_to_tokenizer(encode_request, encode_response);
+        send_json_to_tokenizer(encode_request, encode_response, sizeof(encode_response));
         //printf("Encode Response: %s\n", encode_response);
         // Format
         int current_seq_len = parse_tokens(encode_response, tokens, ctx_len);
@@ -1603,7 +1654,7 @@ int main(int argc, char *argv[])
 #endif
 
 #ifdef USE_CUDA
-            float *current_hidden_state_d = &embeddings_d[0][0];
+            act_t *current_hidden_state_d = &embeddings_d[0][0];
 #endif
 
             // reset file pointer position to load weights from the right position
@@ -1646,7 +1697,7 @@ int main(int argc, char *argv[])
             {
                 int ln_start = last_token_position;
                 int ln_rows = 1;
-                layernorm_cuda((float (*)[d_model])&residual2_out_d[ln_start][0],ln_rows,d_model,&layer_normf_gamma_d[0],&layer_normf_beta_d[0],(float (*)[d_model])&Xf_out_d[ln_start][0],eps);
+                layernorm_cuda((act_t (*)[d_model])&residual2_out_d[ln_start][0],ln_rows,d_model,&layer_normf_gamma_d[0],&layer_normf_beta_d[0],(act_t (*)[d_model])&Xf_out_d[ln_start][0],eps);
 
                 // get logits (only for the last token)
                 dot_2d(&Xf_out_d[ln_start][0],ln_rows,d_model,d_model,&wte_T_d[0][0],d_model,vocab_size,vocab_size,&logits_d[ln_start][0],ln_rows,vocab_size,vocab_size,0,!APPLY_ATTENTION_SCALING);
@@ -1666,18 +1717,18 @@ int main(int argc, char *argv[])
 #endif
             
             // Compute probabilities
-            float probs[vocab_size];
+            act_t probs[vocab_size];
 
 #ifdef USE_CUDA
-            float * logit_row_d = &logits_d[last_token_position][0];
+            act_t * logit_row_d = &logits_d[last_token_position][0];
             float effective_temp = (temperature <= 0.0f) ? 1.0f : temperature;
-            softmax_cuda(logit_row_d,1,vocab_size,vocab_size,logit_row_d,effective_temp);
+            softmax_cuda(logit_row_d, 1, vocab_size, vocab_size, logit_row_d, effective_temp, /*causal_mask=*/0);
 
-            CUDA_CHECK(cudaMemcpy(probs, logit_row_d, vocab_size*sizeof(float), cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(probs, logit_row_d, vocab_size*sizeof(act_t), cudaMemcpyDeviceToHost));
 
 #else
             //===========================================SOFTMAX START===================================//
-            float *logit_row = &logits[last_token_position][0];
+            act_t *logit_row = &logits[last_token_position][0];
             float effective_temp = (temperature <= 0.0f) ? 1.0f : temperature;
 
             // Softmax with temperature and numerical stability
@@ -1716,7 +1767,7 @@ int main(int argc, char *argv[])
                 // --- Apply Top-K Sampling ---
                 int top_k_val = 40;
                 int selected_indices[vocab_size];
-                float selected_probs[vocab_size];
+                act_t selected_probs[vocab_size];
 
                 top_k_sample(probs, vocab_size, top_k_val, selected_indices, selected_probs);
 
@@ -1747,7 +1798,7 @@ int main(int argc, char *argv[])
                 char stream_resp[512];
                 snprintf(stream_req, sizeof(stream_req),
                          "{\"mode\": \"decode\", \"tokens\": [%d]}", sampled_token);
-                send_json_to_tokenizer(stream_req, stream_resp);
+                send_json_to_tokenizer(stream_req, stream_resp, sizeof(stream_resp));
                 // Parse the "text" field from JSON response
                 json_error_t jerr;
                 json_t *jresp = json_loads(stream_resp, 0, &jerr);
@@ -1812,7 +1863,7 @@ int main(int argc, char *argv[])
         "{\"mode\": \"decode\", \"tokens\": [%s]}", token_list);
 
 
-        send_json_to_tokenizer(decode_request, decode_response);
+        send_json_to_tokenizer(decode_request, decode_response, sizeof(decode_response));
 
         if (stream) {
             printf("\n");  // newline after streamed tokens
@@ -1880,14 +1931,14 @@ int main(int argc, char *argv[])
 
     if(perf_out){
         json_dumpf(perf_root, perf_out, JSON_INDENT(4));
-        printf("» Performance log written to %s\n", GPT2_PERFORMANCE_JSON_FILE_NAME);
+        fclose(perf_out);
+        printf("» Performance log written to %s\n", filename_to_open);
     } else{
         perror("Error opening output file");
         exit(EXIT_FAILURE);
     }
     
     json_decref(perf_root);
-    //fclose(fp);
 
-    return 1;
+    return 0;
 }

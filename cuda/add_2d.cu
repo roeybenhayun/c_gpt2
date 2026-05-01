@@ -6,16 +6,16 @@
 
 
 
-__global__ void add_2d_kernel(float *a, float *b, float *out, int a_r, int a_c) {
+__global__ void add_2d_kernel(act_t *a, act_t *b, act_t *out, int a_r, int a_c) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     if (row < a_r && col < a_c) {
         int idx = row * a_c + col;
-        out[idx] = a[idx] + b[idx];
+        out[idx] = to_act(to_float(a[idx]) + to_float(b[idx]));
     }
 }
 
-extern "C" void add_2d_cuda(float *a, int a_r, int a_c, float *b, float *out)
+extern "C" void add_2d_cuda(act_t *a, int a_r, int a_c, act_t *b, act_t *out)
 {
     if (out == NULL) {
         out = a;
