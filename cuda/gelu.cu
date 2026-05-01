@@ -4,19 +4,20 @@
 #include "../include/cuda_kernels.h"
 
 
-__global__ void gelu_kernel(float *in, int cols, int rows) {
+__global__ void gelu_kernel(act_t *in, int cols, int rows) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
-    float term = 0.79788456f; // this is fixed value. move it to defines 
-     
+    float term = 0.79788456f; // this is fixed value. move it to defines
+
     if (row < rows && col < cols) {
         int idx = row * cols + col;
-        float val = in[idx];        
-        in[idx] =  0.5f * val * (1.0f + tanhf (term * (val + 0.044715f*val*val*val)));
+        float val = to_float(in[idx]);
+        float result = 0.5f * val * (1.0f + tanhf (term * (val + 0.044715f*val*val*val)));
+        in[idx] = to_act(result);
     }
 }
 
-extern "C" void gelu_cuda(float *in, int cols, int rows, float *out){
+extern "C" void gelu_cuda(act_t *in, int cols, int rows, act_t *out){
     
     dim3 threadsPerBlock;
     threadsPerBlock.x = 32; 

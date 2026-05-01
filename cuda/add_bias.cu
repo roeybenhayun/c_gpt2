@@ -6,18 +6,19 @@
 
 
 
-__global__ void add_bias_kernel(float *a, float *b, int a_r, int a_c) {
+__global__ void add_bias_kernel(act_t *a, weight_t *b, int a_r, int a_c) {
         int col = blockIdx.x * blockDim.x + threadIdx.x;
         int row = blockIdx.y * blockDim.y + threadIdx.y;
         if (row < a_r && col < a_c) {
-            a[row * a_c + col] += b[col];
+            int idx = row * a_c + col;
+            a[idx] = to_act(to_float(a[idx]) + to_float(b[col]));
         }
 }
 
 
 //float *a, int a_r, int a_c, float *b, float *out)
 
-extern "C" void add_bias_cuda(float *a, int a_r, int a_c, float *b, float * out)
+extern "C" void add_bias_cuda(act_t *a, int a_r, int a_c, weight_t *b, act_t * out)
 {
                                      
     // 1. Define Block Size (Threads per block)

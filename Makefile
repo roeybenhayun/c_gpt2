@@ -16,13 +16,39 @@ $(info DETECTED_OS='$(value DETECTED_OS)')
 DETECTED_ARCH := $(strip $(shell uname -m))
 $(info DETECTED_ARCH='$(value DETECTED_ARCH)')
 
-# Output directories: out/cpu/ for CPU builds, out/gpu/ for GPU builds
+# Output directories: out/cpu/ for CPU builds, out/gpu/<dtype>/ for GPU builds.
+# Per-dtype subdir prevents stale fp32 kernel .o files from being linked into
+# a bf16/fp16 host binary (and vice versa).
 OUTDIR = ./out
 ifneq (,$(filter gpu,$(MAKECMDGOALS)))
-    BINDIR = $(OUTDIR)/gpu
+    ifneq (,$(filter bf16,$(MAKECMDGOALS)))
+        BINDIR = $(OUTDIR)/gpu/bf16
+    else ifneq (,$(filter fp16,$(MAKECMDGOALS)))
+        BINDIR = $(OUTDIR)/gpu/fp16
+    else
+        BINDIR = $(OUTDIR)/gpu
+    endif
 else
     BINDIR = $(OUTDIR)/cpu
 endif
+
+# Storage dtype selection: default is fp32 (current behaviour).
+# Add `bf16` or `fp16` to the make goals to switch. These are GPU-only —
+# the CPU path goes through cblas_sgemm, which has no half-precision form.
+DTYPE_DEF =
+ifneq (,$(filter bf16,$(MAKECMDGOALS)))
+    ifeq (,$(filter gpu,$(MAKECMDGOALS)))
+        $(error bf16 build requires the gpu target (e.g. 'make gpu bf16 small'). CPU bf16 has no GEMM backend.)
+    endif
+    DTYPE_DEF = -DUSE_BF16
+endif
+ifneq (,$(filter fp16,$(MAKECMDGOALS)))
+    ifeq (,$(filter gpu,$(MAKECMDGOALS)))
+        $(error fp16 build requires the gpu target (e.g. 'make gpu fp16 small'). CPU fp16 has no GEMM backend.)
+    endif
+    DTYPE_DEF = -DUSE_FP16
+endif
+PLATFORM_DEFS += $(DTYPE_DEF)
 
 ifeq ($(DETECTED_OS),Darwin) # Check if the operating system is macOS
     ifeq ($(DETECTED_ARCH),arm64) # If it's macOS, now check if the architecture is arm64
@@ -56,7 +82,7 @@ else ifeq ($(DETECTED_OS),Linux)
             CUDA_OBJ_MEDIUM = $(patsubst cuda/%.cu, $(BINDIR)/medium/%.o, $(CUDA_SRC))
             CUDA_OBJ_LARGE  = $(patsubst cuda/%.cu, $(BINDIR)/large/%.o,  $(CUDA_SRC))
             NVCC = /usr/local/cuda-12.8/bin/nvcc
-            NVCC_FLAGS = -O3
+            NVCC_FLAGS = -O3 $(DTYPE_DEF)
 
             # Verify NVIDIA GPU and CUDA toolkit are available
             ifeq ($(wildcard $(NVCC)),)
@@ -91,7 +117,11 @@ SRC = gpt2.c
 $(shell mkdir -p $(BINDIR))
 
 # Targets
-.PHONY: all small medium large clean
+.PHONY: all small medium large clean bf16 fp16
+
+# bf16/fp16 are flag-only goals — they set DTYPE_DEF above and do nothing else.
+bf16 fp16:
+	@:
 
 all: small medium large          # build everything with "make"
 

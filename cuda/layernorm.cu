@@ -4,10 +4,10 @@
 
 #define THREADS_PER_BLOCK 1024 
 
-__global__ void layernorm_kernel(float (*input)[d_model], 
-                                 float *gamma, 
-                                 float *beta, 
-                                 float (*output)[d_model], 
+__global__ void layernorm_kernel(act_t (*input)[d_model],
+                                 weight_t *gamma,
+                                 weight_t *beta,
+                                 act_t (*output)[d_model],
                                  int n_tokens,
                                 float eps) {
     
@@ -24,7 +24,7 @@ __global__ void layernorm_kernel(float (*input)[d_model],
     // Use a stride loop to sum all elements in the row, even if row > 1024
     float sum = 0.0f;
     for (int i = tid; i < d_model; i += blockDim.x) {
-        sum += input[row_idx][i];
+        sum += to_float(input[row_idx][i]);
     }
     s_data[tid] = sum;
     __syncthreads();
@@ -45,7 +45,7 @@ __global__ void layernorm_kernel(float (*input)[d_model],
     // --- PHASE 2: Calculate VARIANCE ---
     float diff_sq_sum = 0.0f;
     for (int i = tid; i < d_model; i += blockDim.x) {
-        float diff = input[row_idx][i] - mean;
+        float diff = to_float(input[row_idx][i]) - mean;
         diff_sq_sum += diff * diff;
     }
     s_data[tid] = diff_sq_sum; 
@@ -71,14 +71,14 @@ __global__ void layernorm_kernel(float (*input)[d_model],
 
     // --- PHASE 3: Final Normalize & Store ---
     for (int i = tid; i < d_model; i += blockDim.x) {
-        float val = input[row_idx][i];
+        float val = to_float(input[row_idx][i]);
         float normalized = (val - mean) * inv_std_dev;
-        output[row_idx][i] = normalized * gamma[i] + beta[i];
+        output[row_idx][i] = to_act(normalized * to_float(gamma[i]) + to_float(beta[i]));
     }
 }
 
 
-extern "C" void layernorm_cuda(float (*input)[d_model],int n_tokens,int d_model_size,float*gamma, float*beta,float (*output)[d_model], float eps ){
+extern "C" void layernorm_cuda(act_t (*input)[d_model],int n_tokens,int d_model_size,weight_t *gamma, weight_t *beta,act_t (*output)[d_model], float eps ){
     dim3 threadsPerBlock;
     threadsPerBlock.x = THREADS_PER_BLOCK;
     threadsPerBlock.y = 1;

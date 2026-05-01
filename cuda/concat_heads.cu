@@ -3,7 +3,7 @@
 #include <cuda_runtime.h>
 #include "../include/cuda_kernels.h"
 
-__global__ void concat_heads_kernel(float *src, float *dest, int token_index, int _nof_heads,int _head_dim, int _ctx_len ) {
+__global__ void concat_heads_kernel(act_t *src, act_t *dest, int token_index, int _nof_heads,int _head_dim, int _ctx_len ) {
 
     // Map blockIdx.x to the head index
     int h = blockIdx.x;
@@ -24,7 +24,7 @@ __global__ void concat_heads_kernel(float *src, float *dest, int token_index, in
 }
 
 
-extern "C" void concat_heads_cuda(float *src, float *dest, int token_index, int _nof_heads,int _head_dim, int _ctx_len ) {
+extern "C" void concat_heads_cuda(act_t *src, act_t *dest, int token_index, int _nof_heads,int _head_dim, int _ctx_len ) {
     dim3 threadsPerBlock;
     threadsPerBlock.x = _head_dim; 
     threadsPerBlock.y = 1;
