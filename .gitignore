@@ -18,7 +18,11 @@ weights/*
 out/*
 !out/.gitkeep
 logs/*
+plots/
 unit_modules/c/dot_2d/out/*
+
+# ───────── Sibling agent memory files ─────────
+GEMINI.md
 
 # ───────── Article videos (too large for git) ─────────
 docs/articles/*/assets/videos/*.mp4
