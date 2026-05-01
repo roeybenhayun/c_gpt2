@@ -1,10 +1,12 @@
 #!/bin/bash
+# Default workload (the "decode" preset shape):
+#   ~13-token prompt, 768 generated tokens — decode-dominated, M ≈ 1 throughout.
 INPUT_TEXT="Once upon a time, in a land far, far away, there was a small dragon."
-# for performance I used out_token=768
 OUT_TOKENS="768"
 CHUNK_SIZE="32"
 OUTPUT_DIR="logs"
 BUILD_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LONG_PROMPT_FILE="${BUILD_DIR}/scripts/prompts/long_prompt.txt"
 
 if [ ! -d "$OUTPUT_DIR" ]; then
     echo "Creating $OUTPUT_DIR directory..."
@@ -14,35 +16,126 @@ fi
 # Parse flags
 RUN_CPU=false
 RUN_GPU=false
+RUN_BF16=false
 PROFILE=false
 MODELS=()
+PROMPT_FILE=""
+PRESET=""                       # "" | "decode" | "prefill" | "balanced"
+OUT_TOKENS_EXPLICIT=false       # tracks whether --out-tokens was passed by the user
 
-for arg in "$@"; do
-    case $arg in
-        --cpu)
-            RUN_CPU=true
+usage() {
+    cat <<'EOF' >&2
+Usage: ./run.sh [runners] [preset] [overrides] [size...]
+  runners:   --cpu | --gpu | --bf16   (default: all three)
+  preset:    --decode | --prefill | --balanced  (mutually exclusive; default: --decode)
+               --decode    short prompt + 768 output tokens (M ≈ 1, decode-bound)
+               --prefill   long prompt (~512 tok) + 32 output tokens (large M, prefill-dominated)
+               --balanced  medium prompt (~200 tok) + 200 output tokens (mixed)
+  overrides: --prompt-file <path>   replaces the preset's prompt (escape hatch)
+             --out-tokens <N>       replaces the preset's output count
+  options:   --profile               run under nsys (GPU runs only)
+  sizes:     small | medium | large  (default: all three)
+EOF
+}
+
+set_preset() {
+    if [ -n "$PRESET" ] && [ "$PRESET" != "$1" ]; then
+        echo "Error: presets --decode / --prefill / --balanced are mutually exclusive." >&2
+        exit 1
+    fi
+    PRESET="$1"
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --cpu)        RUN_CPU=true; shift ;;
+        --gpu)        RUN_GPU=true; shift ;;
+        --bf16)       RUN_BF16=true; shift ;;
+        --profile)    PROFILE=true; shift ;;
+        --decode)     set_preset decode; shift ;;
+        --prefill)    set_preset prefill; shift ;;
+        --balanced)   set_preset balanced; shift ;;
+        --prompt-file)
+            if [ "$#" -lt 2 ]; then
+                echo "--prompt-file requires a path argument" >&2
+                exit 1
+            fi
+            PROMPT_FILE="$2"
+            shift 2
             ;;
-        --gpu)
-            RUN_GPU=true
+        --out-tokens)
+            if [ "$#" -lt 2 ]; then
+                echo "--out-tokens requires a value argument" >&2
+                exit 1
+            fi
+            OUT_TOKENS="$2"
+            OUT_TOKENS_EXPLICIT=true
+            shift 2
             ;;
-        --profile)
-            PROFILE=true
-            ;;
+        --help|-h)    usage; exit 0 ;;
         small|medium|large)
-            MODELS+=("$arg")
+            MODELS+=("$1")
+            shift
             ;;
         *)
-            echo "Error: Invalid argument '$arg'."
-            echo "Usage: ./run.sh [--cpu] [--gpu] [--profile] [small] [medium] [large]"
+            echo "Error: Invalid argument '$1'." >&2
+            usage
             exit 1
             ;;
     esac
 done
 
-# Default: run both if neither flag specified
-if ! $RUN_CPU && ! $RUN_GPU; then
+# Apply preset defaults. Each preset bakes a (prompt, output count) shape so the
+# workload is reproducible. Explicit --prompt-file / --out-tokens override the preset.
+PROMPT_BYTES_LIMIT=8000   # default cap (under input_buffer[MAX_PROMPT_BYTES=8192])
+case "$PRESET" in
+    "" | decode)
+        # leave INPUT_TEXT and OUT_TOKENS at the defaults declared above
+        :
+        ;;
+    prefill)
+        # Large prompt → big M during prefill. 32 output tokens → small decode tail.
+        # English BPE is closer to ~5 chars/token in practice, so ~5120 bytes
+        # tokenises to ~1000 prompt tokens (verified empirically against
+        # long_prompt.txt: 2048 bytes → 403 tokens).
+        : "${PROMPT_FILE:=$LONG_PROMPT_FILE}"
+        $OUT_TOKENS_EXPLICIT || OUT_TOKENS=32
+        PROMPT_BYTES_LIMIT=5120
+        ;;
+    balanced)
+        # Medium prompt + medium output. ~200 tokens of prompt = ~800 bytes,
+        # ~200 output tokens for a roughly 50/50 phase mix on Large.
+        : "${PROMPT_FILE:=$LONG_PROMPT_FILE}"
+        $OUT_TOKENS_EXPLICIT || OUT_TOKENS=200
+        PROMPT_BYTES_LIMIT=800
+        ;;
+esac
+
+# If a prompt file was selected (by preset or --prompt-file), load + sanitize it.
+# Sanitization mirrors prefill_sweep.sh: strip non-ASCII and JSON-breaking chars
+# so the naive snprintf-into-JSON in gpt2.c doesn't produce malformed requests.
+if [ -n "$PROMPT_FILE" ]; then
+    if [ ! -f "$PROMPT_FILE" ]; then
+        echo "Prompt file not found: $PROMPT_FILE" >&2
+        exit 1
+    fi
+    INPUT_TEXT=$(tr -cd '\40-\176' < "$PROMPT_FILE" | tr -d '"\\' | tr -s ' ')
+    INPUT_TEXT="${INPUT_TEXT:0:$PROMPT_BYTES_LIMIT}"
+    if [ -z "$INPUT_TEXT" ]; then
+        echo "Sanitized prompt from $PROMPT_FILE was empty" >&2
+        exit 1
+    fi
+fi
+
+echo "Preset:      ${PRESET:-decode (default)}"
+echo "Prompt:      ${#INPUT_TEXT} bytes  (source: ${PROMPT_FILE:-built-in default})"
+echo "Out tokens:  $OUT_TOKENS"
+
+# Default: run all three (cpu, gpu fp32, gpu bf16) if no runner flag specified
+if ! $RUN_CPU && ! $RUN_GPU && ! $RUN_BF16; then
     RUN_CPU=true
     RUN_GPU=true
+    RUN_BF16=true
 fi
 
 # Default: all models if none specified
@@ -52,25 +145,29 @@ if [ ${#MODELS[@]} -eq 0 ]; then
 fi
 
 run_models() {
-    local mode="$1"  # "cpu" or "gpu"
-    local tag="$2"   # tag for output filename
+    local bin_dir="$1"  # binary directory (e.g. "out/cpu", "out/gpu", "out/gpu/bf16")
+    local tag="$2"      # tag for output filename
+    local profile_ok="$3"  # "yes" if profiling is allowed for this mode
+
+    # Embed the preset name in every output filename so the analyzer can
+    # discover one regime at a time. Default (no preset given) maps to "decode".
+    local preset_tag="${PRESET:-decode}"
 
     for size in "${MODELS[@]}"; do
         local model="gpt2_${size}"
         TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
-        output_file="${OUTPUT_DIR}/${model}_${tag}_req_out_tokens_${OUT_TOKENS}_token_chunk_size_${CHUNK_SIZE}_ts_${TIMESTAMP}.json"
-        echo "Running $model ($tag)..."
+        output_file="${OUTPUT_DIR}/${model}_${tag}_${preset_tag}_req_out_tokens_${OUT_TOKENS}_token_chunk_size_${CHUNK_SIZE}_ts_${TIMESTAMP}.json"
+        echo "Running $model ($tag, ${preset_tag})..."
         echo "Outputting to $output_file"
 
-        local bin_dir="./out/${mode}"
         local CMD="./${bin_dir}/$model --prompt \"$INPUT_TEXT\" \
                     --req_out_tokens \"$OUT_TOKENS\" \
                     --token_chunk_size \"$CHUNK_SIZE\" \
                     --json_out_file \"$output_file\" \
                     --no-stream --verbose"
 
-        if $PROFILE && [ "$mode" = "gpu" ]; then
-            local nsys_out="${OUTPUT_DIR}/${model}_${tag}_profile_${TIMESTAMP}"
+        if $PROFILE && [ "$profile_ok" = "yes" ]; then
+            local nsys_out="${OUTPUT_DIR}/${model}_${tag}_${preset_tag}_profile_${TIMESTAMP}"
             echo "Profiling with nsys → ${nsys_out}.nsys-rep"
             eval nsys profile --stats=true -o "$nsys_out" $CMD
         else
@@ -95,13 +192,13 @@ if $RUN_CPU; then
     echo "========================================="
     echo "  Running CPU inference"
     echo "========================================="
-    run_models cpu cpu
+    run_models out/cpu cpu no
 fi
 
-# ───────── GPU build & run ─────────
+# ───────── GPU FP32 build & run ─────────
 if $RUN_GPU; then
     echo "========================================="
-    echo "  Building GPU binaries"
+    echo "  Building GPU (fp32) binaries"
     echo "========================================="
     make gpu "${MODELS[@]}"
     if [ $? -ne 0 ]; then
@@ -110,11 +207,28 @@ if $RUN_GPU; then
     fi
 
     echo "========================================="
-    echo "  Running GPU inference"
+    echo "  Running GPU (fp32) inference"
     echo "========================================="
-    run_models gpu gpu
+    run_models out/gpu gpu yes
+fi
+
+# ───────── GPU BF16 build & run ─────────
+if $RUN_BF16; then
+    echo "========================================="
+    echo "  Building GPU (bf16) binaries"
+    echo "========================================="
+    make gpu bf16 "${MODELS[@]}"
+    if [ $? -ne 0 ]; then
+        echo "GPU bf16 build failed!"
+        exit 1
+    fi
+
+    echo "========================================="
+    echo "  Running GPU (bf16) inference"
+    echo "========================================="
+    run_models out/gpu/bf16 bf16 yes
 fi
 
 echo "========================================="
-echo "  Runs completed. (CPU=$RUN_CPU GPU=$RUN_GPU)"
+echo "  Runs completed. (CPU=$RUN_CPU GPU=$RUN_GPU BF16=$RUN_BF16)"
 echo "========================================="
