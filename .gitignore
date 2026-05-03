@@ -18,7 +18,7 @@ weights/*
 out/*
 !out/.gitkeep
 logs/*
-plots/
+/plots/
 unit_modules/c/dot_2d/out/*
 
 # ───────── Sibling agent memory files ─────────
