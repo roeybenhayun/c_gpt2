@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sweep prompt lengths to compare FP32 vs BF16 prefill (TTFT).
+# Benchmark prompt lengths to compare FP32 vs BF16 prefill (TTFT).
 #
 # Goal: validate that BF16 wins on M > 1 (prefill) where tensor cores engage,
 # even though it doesn't help in the M = 1 generation path.
@@ -8,11 +8,11 @@
 # read `ttft_s` from the JSON log — that field is pure prefill time.
 #
 # Usage:
-#   ./scripts/prefill_sweep.sh                          # large, default sizes
-#   ./scripts/prefill_sweep.sh medium                   # different model
-#   ./scripts/prefill_sweep.sh large path/to/text.md    # custom source text
-#   ./scripts/prefill_sweep.sh --profile                # also nsys-profile target 512
-#   ./scripts/prefill_sweep.sh --profile --profile-target 1000 large
+#   ./scripts/prefill_benchmark.sh                          # large, default sizes
+#   ./scripts/prefill_benchmark.sh medium                   # different model
+#   ./scripts/prefill_benchmark.sh large path/to/text.md    # custom source text
+#   ./scripts/prefill_benchmark.sh --profile                # also nsys-profile target 512
+#   ./scripts/prefill_benchmark.sh --profile --profile-target 1000 large
 
 set -e
 
@@ -72,7 +72,7 @@ BYTES_PER_TOKEN=4
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-OUTPUT_DIR="logs/prefill_sweep"
+OUTPUT_DIR="logs/prefill_benchmark"
 mkdir -p "$OUTPUT_DIR"
 
 # Pre-flight checks

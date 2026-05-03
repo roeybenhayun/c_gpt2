@@ -99,7 +99,30 @@ is_manual_mode = any(files.values())
 #   Series flags: --cpu, --gpu, --bf16  (if none given, all three)
 #   Preset flag : --decode | --prefill | --balanced  (matches run.sh's preset
 #                  embedded in log filenames; if none given, no preset filter)
-cli_args = set(sys.argv[1:])
+#   --log-dir <path>  : override the directory globbed for log JSONs (default: logs)
+
+# Pull --log-dir out before the set-based flag parsing — set() discards the
+# value that follows the flag, so it can't ride along with the booleans.
+_filtered_argv = []
+_i = 1
+while _i < len(sys.argv):
+    _arg = sys.argv[_i]
+    if _arg == "--log-dir":
+        if _i + 1 >= len(sys.argv):
+            print("Error: --log-dir requires a path argument", file=sys.stderr)
+            sys.exit(1)
+        LOG_DIR = sys.argv[_i + 1]
+        _i += 2
+    elif _arg.startswith("--log-dir="):
+        LOG_DIR = _arg.split("=", 1)[1]
+        _i += 1
+    else:
+        _filtered_argv.append(_arg)
+        _i += 1
+
+print(f"  Log dir: {LOG_DIR}")
+
+cli_args = set(_filtered_argv)
 want_cpu = "--cpu" in cli_args
 want_gpu = "--gpu" in cli_args
 want_bf16 = "--bf16" in cli_args
@@ -596,11 +619,11 @@ def save_individual_plot(plot_func, filename, figsize=(10, 7)):
     plt.close(fig)
 
 # --- Determine layout ---
-# - prefill preset: the sweep plots (overlay, speedup-vs-context, TPOT) are
+# - prefill preset: the benchmark plots (overlay, speedup-vs-context, TPOT) are
 #   degenerate at out_tokens=32, so swap them out for the new prefill-aware
 #   charts (TTFT bar + phase decomposition).
 # - everything else (decode preset / no preset / balanced): keep the existing
-#   2×2 sweep+bars layout that works for multi-chunk decode runs.
+#   2×2 benchmark+bars layout that works for multi-chunk decode runs.
 is_prefill_layout = preset_filter == "prefill"
 
 ax_overlay = ax_speedup = ax_tpot = ax_bars = ax_ttft = ax_phase = None
@@ -620,7 +643,7 @@ elif preset_filter == "decode" and has_comparison and any_new_metrics:
     ax_bars    = axes[1][1]   # TPS summary bars
 elif has_comparison and any_new_metrics:
     # Balanced (or no preset): everything is meaningful — show all 6 panels.
-    # Row 0 — curves over context length (the sweep view).
+    # Row 0 — curves over context length (the benchmark view).
     # Row 1 — summary bars (the at-a-glance view).
     fig, axes = plt.subplots(2, 3, figsize=(24, 14))
     ax_overlay = axes[0][0]   # raw FP32 + BF16 latency curves (6 lines)

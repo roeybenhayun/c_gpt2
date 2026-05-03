@@ -17,6 +17,7 @@ fi
 RUN_CPU=false
 RUN_GPU=false
 RUN_BF16=false
+RUN_FP16=false
 PROFILE=false
 MODELS=()
 PROMPT_FILE=""
@@ -26,7 +27,10 @@ OUT_TOKENS_EXPLICIT=false       # tracks whether --out-tokens was passed by the 
 usage() {
     cat <<'EOF' >&2
 Usage: ./run.sh [runners] [preset] [overrides] [size...]
-  runners:   --cpu | --gpu | --bf16   (default: all three)
+  runners:   --cpu | --gpu | --bf16    (default if none given: all three)
+             --fp16                    (opt-in only — NOT included in the default set;
+                                        same hardware path as --bf16 but FP16 storage,
+                                        so use it to compare numerical behaviour vs BF16)
   preset:    --decode | --prefill | --balanced  (mutually exclusive; default: --decode)
                --decode    short prompt + 768 output tokens (M ≈ 1, decode-bound)
                --prefill   long prompt (~512 tok) + 32 output tokens (large M, prefill-dominated)
@@ -51,6 +55,7 @@ while [ "$#" -gt 0 ]; do
         --cpu)        RUN_CPU=true; shift ;;
         --gpu)        RUN_GPU=true; shift ;;
         --bf16)       RUN_BF16=true; shift ;;
+        --fp16)       RUN_FP16=true; shift ;;
         --profile)    PROFILE=true; shift ;;
         --decode)     set_preset decode; shift ;;
         --prefill)    set_preset prefill; shift ;;
@@ -112,7 +117,7 @@ case "$PRESET" in
 esac
 
 # If a prompt file was selected (by preset or --prompt-file), load + sanitize it.
-# Sanitization mirrors prefill_sweep.sh: strip non-ASCII and JSON-breaking chars
+# Sanitization mirrors prefill_benchmark.sh: strip non-ASCII and JSON-breaking chars
 # so the naive snprintf-into-JSON in gpt2.c doesn't produce malformed requests.
 if [ -n "$PROMPT_FILE" ]; then
     if [ ! -f "$PROMPT_FILE" ]; then
@@ -131,8 +136,10 @@ echo "Preset:      ${PRESET:-decode (default)}"
 echo "Prompt:      ${#INPUT_TEXT} bytes  (source: ${PROMPT_FILE:-built-in default})"
 echo "Out tokens:  $OUT_TOKENS"
 
-# Default: run all three (cpu, gpu fp32, gpu bf16) if no runner flag specified
-if ! $RUN_CPU && ! $RUN_GPU && ! $RUN_BF16; then
+# Default: run cpu + gpu fp32 + gpu bf16 if no runner flag specified.
+# FP16 is opt-in only — it's a numerical-behaviour comparison vs BF16, not part
+# of the article's main story, so it's deliberately NOT in the default set.
+if ! $RUN_CPU && ! $RUN_GPU && ! $RUN_BF16 && ! $RUN_FP16; then
     RUN_CPU=true
     RUN_GPU=true
     RUN_BF16=true
@@ -229,6 +236,23 @@ if $RUN_BF16; then
     run_models out/gpu/bf16 bf16 yes
 fi
 
+# ───────── GPU FP16 build & run ─────────
+if $RUN_FP16; then
+    echo "========================================="
+    echo "  Building GPU (fp16) binaries"
+    echo "========================================="
+    make gpu fp16 "${MODELS[@]}"
+    if [ $? -ne 0 ]; then
+        echo "GPU fp16 build failed!"
+        exit 1
+    fi
+
+    echo "========================================="
+    echo "  Running GPU (fp16) inference"
+    echo "========================================="
+    run_models out/gpu/fp16 fp16 yes
+fi
+
 echo "========================================="
-echo "  Runs completed. (CPU=$RUN_CPU GPU=$RUN_GPU BF16=$RUN_BF16)"
+echo "  Runs completed. (CPU=$RUN_CPU GPU=$RUN_GPU BF16=$RUN_BF16 FP16=$RUN_FP16)"
 echo "========================================="

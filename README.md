@@ -206,16 +206,16 @@ uv run python scripts/performance_analysis.py --gpu --bf16 --prefill # …filter
 uv run python scripts/performance_analysis.py --cpu --gpu --bf16 --balanced
 ```
 
-Series flags: `--cpu`, `--gpu`, `--bf16`. Preset flags: `--decode`, `--prefill`, `--balanced` (mutually exclusive).
+Series flags: `--cpu`, `--gpu`, `--bf16`. Preset flags: `--decode`, `--prefill`, `--balanced` (mutually exclusive). Override the directory globbed for JSONs with `--log-dir <path>` (default: `logs`) — useful for analysing archived runs (e.g. cloud results under `logs/lambda/h100/<run>/`) without disturbing your local `logs/`.
 
-### Long-prompt prefill sweep
+### Long-prompt prefill benchmark
 
-For sweeping prompt length and measuring TTFT (pure prefill time) directly:
+For benchmarking prompt length and measuring TTFT (pure prefill time) directly:
 
 ```bash
-./scripts/prefill_sweep.sh                       # Large, default sizes
-./scripts/prefill_sweep.sh --profile             # Same, plus nsys at the largest size
-./scripts/prefill_sweep.sh medium                # Different model
+./scripts/prefill_benchmark.sh                       # Large, default sizes
+./scripts/prefill_benchmark.sh --profile             # Same, plus nsys at the largest size
+./scripts/prefill_benchmark.sh medium                # Different model
 ```
 
 Produces a side-by-side FP32 vs BF16 TTFT table at increasing prompt lengths.
@@ -247,7 +247,7 @@ Prints a kernel-family-bucketed table with `baseline | target | ratio | Δ time`
 ├── include/                        # Headers (cuda_kernels.h, model_config.h)
 ├── scripts/
 │   ├── run.sh                      # End-to-end build + run + log
-│   ├── prefill_sweep.sh            # TTFT sweep at varying prompt lengths
+│   ├── prefill_benchmark.sh        # TTFT benchmark at varying prompt lengths
 │   ├── performance_analysis.py     # Plots + summary tables from JSON logs
 │   ├── compare_profiles.py         # nsys-rep diff (per-kernel time)
 │   └── prompts/                    # Reusable prompt fixtures (long_prompt.txt)

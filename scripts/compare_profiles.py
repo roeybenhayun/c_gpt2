@@ -46,6 +46,10 @@ def parse_nsys_csv(report_path: Path) -> dict:
         "--report", "cuda_gpu_kern_sum",
         "--format", "csv",
         "--output", "-",
+        # If the .sqlite sibling is older than the .nsys-rep (e.g. files were
+        # copied with `cp` which doesn't preserve mtimes), nsys refuses to
+        # proceed. --force-export regenerates the sqlite when needed.
+        "--force-export=true",
         str(report_path),
     ]
     out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode()
