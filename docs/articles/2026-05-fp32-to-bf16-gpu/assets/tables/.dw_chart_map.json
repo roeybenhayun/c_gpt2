@@ -1,0 +1,21 @@
+{
+  "bf16-sweet-spot-by-M.png": "Hw4Ds",
+  "decode-nsys-fp32-vs-bf16.png": "6fPvV",
+  "decode-tps-5080.png": "UgYju",
+  "default-benchmark-tps.png": "XzB4x",
+  "dilution-kernel-breakdown.png": "clE68",
+  "dilution-layers-levers.png": "wXJ21",
+  "h100-amdahl-kernel-fraction.png": "r36lm",
+  "h100-hypotheses-confirmed.png": "721Dr",
+  "h100-instance-setup.png": "9f5aD",
+  "h100-tensor-op-kernels.png": "4ZuJx",
+  "h100-vs-5080-decode-tps.png": "Vy3bZ",
+  "h100-vs-5080-prefill-ttft.png": "ZW2SU",
+  "prefill-1024-kernels-after-fix.png": "87fy1",
+  "prefill-1024-kernels-before-fix.png": "3oCmF",
+  "prefill-ttft-5080.png": "XX0II",
+  "prefill-ttft-after-fix.png": "RNSsa",
+  "prefill-ttft-before-fix.png": "9rEUF",
+  "scoreboard.png": "Np9ta",
+  "workload-shapes.png": "BFn5z"
+}
