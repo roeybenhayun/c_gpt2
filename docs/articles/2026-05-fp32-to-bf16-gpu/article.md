@@ -20,9 +20,9 @@ Spoiler: it's more complicated than that. The implementation worked end-to-end, 
 
 The third article moved GPT-2 inference from a pure-C CPU implementation to GPU. Matrix multiplications run on cuBLAS; the rest goes through 8 hand-written CUDA kernels (`embeddings`, `layernorm`, `softmax`, `add_2d`, `add_bias`, `casual_masking`, `concat_heads`, `gelu`). KV cache stayed enabled. Tokenization stayed on CPU via a Python local running service.
 
-The endpoint was 60 TPS on Large with 768 generated tokens. Profiling showed cuBLAS GEMM kernels at ~77% of GPU time and `softmax_kernel` (post-rewrite) at ~16% — the shape you'd expect for a transformer where matmul should dominate.
+The result was 60 TPS on Large with 768 generated tokens. Profiling showed cuBLAS GEMM kernels at ~77% of GPU time and `softmax_kernel` (post-rewrite) at ~16% — the shape you'd expect for a transformer where matmul should dominate.
 
-Per-token weight bandwidth on Large in FP32 was 2.88 GiB. At RTX 5080's ~960 GB/s peak that bounds throughput at ~330 TPS. The measured 60 TPS sat at ~18% of that ceiling, so on paper there was room — and BF16 would shrink the per-token bandwidth by 2×, doubling the ceiling.
+Per-token weight bandwidth on Large in FP32 was 2.88 GiB. At RTX 5080's ~960 GB/s peak that bounds throughput at ~330 TPS. The measured 60 TPS sat at ~18% of that ceiling, so on paper there was room — and BF16 would shrink the per-token bandwidth by 2× (1.44 GiB), doubling the ceiling (~660 TPS).
 
 That's the version of the story the previous article ended on.
 
@@ -34,13 +34,13 @@ That's the version of the story the previous article ended on.
 
 The three formats this article touches, side by side at the bit level. The takeaway for inference: **BF16 keeps FP32's full 8-bit exponent (so the dynamic range is identical) and only sacrifices mantissa precision** — that's why it's the safer half-precision choice for transformer weights and activations, which span many orders of magnitude. FP16's 5-bit exponent gives more mantissa bits but is much more prone to overflow/underflow without loss-scaling tricks. In this codebase, **reductions and accumulators stay FP32** regardless of storage dtype — and cuBLAS GEMMs use BF16 inputs with an FP32 accumulator (`CUBLAS_COMPUTE_32F`). So the storage choice affects two things: bytes per element streamed from VRAM, and which cuBLAS algorithm gets picked (FP32 inputs → CUDA-core path; BF16 inputs → tensor-core path).
 
-**Why BF16 specifically, and not FP16?** This is what the industry has converged on. Llama 3, Mistral, and DeepSeek-V3 all ship their weights in BF16; vLLM's auto-precision logic picks BF16 for BF16-trained models (and most post-2023 LLMs are BF16-trained); TensorRT-LLM treats BF16 as a first-class precision alongside FP8/INT8 quantization. The reason is exactly the dynamic-range argument above — BF16's FP32-equivalent exponent range avoids the underflow/overflow issues that plague FP16 during training, and that "trained in BF16" carries through to BF16 being the natural inference dtype as well. FP16 was the dominant half-precision format pre-Ampere when BF16 hardware support didn't exist; on modern Blackwell/Hopper silicon both formats run on the same tensor cores at the same throughput, so the historical FP16 advantage has evaporated. (For the curious: we did run FP16 on this codebase as a side experiment — performance is within ±5% of BF16 across all sizes and presets, with no precision-related failures observed. We focus on BF16 here because it's the format anyone would actually choose for a new inference deployment.)
+**Why BF16 specifically, and not FP16?** This is what the industry has converged on. Llama 3, Mistral, and DeepSeek-V3 all ship their weights in BF16; The reason is exactly the dynamic-range argument above — BF16's FP32-equivalent exponent range avoids the underflow/overflow issues that plague FP16 during training, and that "trained in BF16" carries through to BF16 being the natural inference dtype as well.
 
 ---
 
 ## Amdahl's law — a quick primer
 
-Amdahl's law gets referenced several times below. If you're not familiar with it, here's the one-paragraph version.
+Amdahl's law gets referenced several times below. Here's a one-paragraph reminder.
 
 Amdahl's law says that **the speedup you get from optimizing part of a program is bounded by the fraction of time that part takes**. If 50% of your runtime is in some component X and you make X infinitely fast, the total runtime only halves — so the maximum total speedup is 2×, not infinite. The formula:
 
@@ -55,7 +55,7 @@ where `p` is the fraction of original time spent in the part you're optimizing, 
 The practical takeaway: **once you've shrunk one bottleneck, the next biggest one becomes the new ceiling**. Two examples that come up repeatedly in this article:
 
 - **Kernel-level**: cuBLAS GEMM is 62% of GPU kernel time, and BF16 makes the GEMM 3.3× faster on Large prefill. The overall *kernel* speedup is `1 / (0.38 + 0.62/3.3) ≈ 1.8×` — not 3.3×. The non-GEMM kernels (which BF16 doesn't touch) become the new ceiling.
-- **End-to-end**: host overhead is ~50% of decode wall clock, so the GPU portion is the other 50% (`p = 0.5`). Even with an infinitely fast GPU (`s → ∞`), total wall-clock speedup is `1 / (0.5 + 0.5/∞) = 1 / 0.5 = 2×`. On this workload as currently structured, no GPU upgrade alone can exceed that bound — closing the gap requires changing the execution shape (CUDA Graphs, async tokenizer, etc.) to shrink the host portion.
+- **End-to-end**: host overhead is ~50% of decode wall clock, so the GPU portion is the other 50% (`p = 0.5`). Even with an infinitely fast GPU (`s → ∞`), total wall-clock speedup is `1 / (0.5 + 0.5/∞) = 1 / 0.5 = 2×`. On this workload as currently structured, no GPU upgrade alone can exceed that bound — closing the gap requires changing the execution shape to shrink the host portion.
 
 Every time the article says something is "the binding constraint", "the ceiling", or "Amdahl-bound", it's pointing at this same idea.
 
@@ -210,7 +210,7 @@ What's plotted: chunk wall time (~32 tokens per chunk) vs total context length, 
 
 What's plotted: the BF16-over-FP32 speedup ratio per model size, with dotted horizontal lines at the per-model mean. Three curve features are worth calling out:
 
-- **Mean speedup shrinks with model size** — Small ~1.20×, Medium ~1.10×, Large ~1.03×. (The mirror image of the prefill picture, presented later in the article.)
+- **Mean speedup shrinks with model size** — Small ~1.17×, Medium ~1.10×, Large ~1.03×. (The mirror image of the prefill picture, presented later in the article.)
 - **A peak at short context (~100 tokens)** — pure GEMV territory, weight reads dominate, BF16 halves the bytes ⇒ ratio peaks.
 - **A dip in the middle (~300–600), then a climb back up at long context (~700+)** — KV-cache reads grow linearly with context length, so at long context the BF16 win on the cache reads pulls the ratio back up.
 
@@ -245,7 +245,7 @@ Profiling Large under both dtypes (default 768-token decode-heavy run) showed th
 Two things stood out:
 
 1. **No tensor cores.** The BF16 profile showed 1.6 million invocations of `gemvx` (the GEMV kernel for `M = 1`) and only ~1600 invocations of any `cutlass_*_tensorop_*` kernel. cuBLAS at `M = 1` doesn't engage tensor cores — it picks a GEMV-shaped kernel that reads BF16 weights but multiplies on the FP32 ALUs.
-2. **A new kernel appeared:** `splitKreduce_kernel` ran 720× more often in BF16 (320 ms total). cuBLAS picked a split-K decomposition for some BF16 GEMVs that needed a separate reduction pass — pure overhead that didn't exist in the FP32 path.
+2. **A new kernel appeared:** `splitKreduce_kernel` ran 720× more often in BF16 (320 ms total). It's a "cleanup" pass: when cuBLAS splits a single matrix multiply across multiple workers along the inner dimension, each worker computes a partial sum, and this kernel adds those partial sums together to produce the final values. The FP32 path didn't need to split, so it didn't need this pass — it's pure extra work that the BF16 path picked up.
 
 The hypothesis at this point: **BF16 only delivers its expected speedup when M > 1**, because that's the regime where cuBLAS actually engages tensor cores. The default test was decode-dominated (`M = 1` for ~99% of the work), so the BF16 GEMM win never materialized. Prefill — long prompt, short output — *should* tell a different story.
 
@@ -281,7 +281,7 @@ The first two rows confirm the hypothesis was *partially* right: BF16 prefill **
 
 But a single custom kernel — `casual_masking_kernel` — went from 101 ms to 201 ms, a clean **2× slowdown in BF16**. That single kernel ate all of the GEMM savings, plus another ~50 ms on top.
 
-The masking kernel walks the upper triangle of the attention-score matrix and writes `-INFINITY` to mask future positions. With one thread per row and a sequential loop of stores per thread, it's bandwidth-light and should be roughly equal in either dtype, or slightly faster in BF16 (half the bytes per write). Empirically it does the opposite. The most likely explanation is that the kernel is issue-bound rather than bandwidth-bound — each thread issues one store per loop iteration regardless of dtype — and the BF16 store sequence costs more than the FP32 one for this code shape. Plus the kernel runs **720 times per token** in this code: once per attention head per layer (20 heads × 36 layers), even though the same upper-triangular pattern is masked into each head's scores buffer. Most of those calls are redundant — but they all pay the BF16 penalty.
+The masking kernel walks the upper triangle of the attention-score matrix and writes `-INFINITY` to mask future positions. With one thread per row and a sequential loop of stores per thread, it's bandwidth-light and should be roughly equal in either dtype, or slightly faster in BF16 (half the bytes per write). Empirically it does the opposite. The kernel runs **720 times per token** in this code: once per attention head per layer (20 heads × 36 layers), even though the same upper-triangular pattern is masked into each head's scores buffer. Most of those calls are redundant — but they all pay the BF16 penalty.
 
 ### Fixing the mask
 
@@ -343,7 +343,7 @@ The sweet spot for BF16 to deliver its predicted speedup, end-to-end, is workloa
 
 ## Results — prefill across model sizes
 
-We'll start with prefill since it's the regime where BF16 was supposed to win. Recall: prefill is the first forward pass over the prompt — all `N` tokens projected together as one `M = N` GEMM. **TTFT (time to first token)** measures pure prefill cost: the wall-clock interval from "prompt arrives" to "first output token emitted", with no decode mixed in. With M ≈ 965 we're well past the M ≳ 128 sweet-spot threshold for all three model sizes, so on paper BF16 should win across the board. The chart below shows it doesn't — the speedup grows monotonically from Small to Large, and Small actually loses to FP32.
+Prefill is the first forward pass over the prompt — all `N` tokens projected together as one `M = N` GEMM. **TTFT (time to first token)** measures pure prefill cost: the wall-clock interval from "prompt arrives" to "first output token emitted", with no decode mixed in. With M ≈ 965 we're well past the M ≳ 128 sweet-spot threshold for all three model sizes, so on paper BF16 should win across the board. The chart below shows it doesn't — the speedup grows monotonically from Small to Large, and Small actually loses to FP32.
 
 The reproducible workload is `./scripts/run.sh --gpu --bf16 --prefill` (~965-token prompt, 32 output tokens). Two charts come out of it.
 
@@ -363,7 +363,7 @@ What's plotted: the prefill-only wall time (TTFT in seconds) for each `gpt2_<siz
 
 ![Phase decomposition — prefill vs decode share of total wall time](assets/plots/ttft_prefill_phase_decomp.png)
 
-What's plotted: a stacked bar per model size split into two segments — the **prefill** share (full opacity, the TTFT) and the **decode** share (35% opacity, `TPOT × output_tokens`). The interesting result is the inversion between token count and wall-clock time: 965 prompt + 32 output tokens is ~97% prefill *by token count*, but the chart shows **decode taking ~3× the wall time of prefill at every size** (e.g. Large: 205 ms prefill + 614 ms decode). Per-token, prefill at M = 965 is dramatically faster than decode at M = 1 — so even a workload this prefill-heavy on paper still spends most of its wall clock in the decode phase. This is exactly the regime gap that motivates the rest of the article.
+What's plotted: a stacked bar per model size split into two segments — the **prefill** share and the **decode** share (`TPOT × output_tokens`). The interesting result is the inversion between token count and wall-clock time: 965 prompt + 32 output tokens is ~97% prefill *by token count*, but the chart shows **decode taking ~3× the wall time of prefill at every size** (e.g. Large: 205 ms prefill + 614 ms decode). Per-token, prefill at M = 965 is dramatically faster than decode at M = 1 — so even a workload this prefill-heavy on paper still spends most of its wall clock in the decode phase. This is exactly the regime gap that motivates the rest of the article.
 
 Caveat on the y-axis: both segments are wall-clock, not pure GPU kernel time — they include host-side per-step overhead (kernel launches, the sampler, the tokenizer round-trip). Decode pays that overhead 32 times here (once per generated token) and prefill pays it just once for the whole prompt, so a meaningful share of the decode bar is host work, not GPU work. The H100 nsys breakdown later in the article (Amdahl section) puts host time at ~50% of decode wall clock, which means decode's *kernel-only* share is closer to 1.5× prefill's rather than 3×. Still decode-dominated, just less dramatically.
 
@@ -375,17 +375,9 @@ All three sizes share the same M (~965), all three are above the tensor-core thr
 
 **2. Non-GEMM kernels and host overhead are a fixed cost — they don't scale with dtype.** The post-fix 1024-token Large profile (the *After the fix — 1024-token prefill, re-profiled* table earlier) broke down as ~73 ms FP32 GEMM + ~44 ms everything else (softmax, layernorm, gelu, add_bias, concat_heads, kernel launches, tokenizer round-trip). When BF16 saved 51 ms on GEMMs, the ~44 ms "everything else" stayed put. For Small the GEMM term is roughly 12% of Large's FLOP volume, so the absolute BF16 savings shrink to a few milliseconds — while the non-GEMM fraction stays a meaningful share of TTFT. The denominator the speedup is computed against shrinks faster than the numerator.
 
-On top of those two, BF16 has slightly higher per-call overhead than FP32: `cublasGemmEx` runs a wider heuristic search than `cublasSgemm`, and the dtype-templated CUDA kernels carry a tiny extra launch cost. On Small, where each GEMM is small to begin with, that overhead can flip a 2–3 ms savings into a net loss — which is exactly the +20% the chart shows.
+Both effects scale with parameter count, which is why the speedup grows monotonically: **Small (+20% slower) → Medium (~tie) → Large (−16% faster)**.
 
-Putting it in one expression:
 
-```
-BF16 prefill win  ∝  (GEMM-time fraction)  ×  (tensor-core utilization)
-                            ↑                            ↑
-                  grows with d_model · n_layers   grows with K, N
-```
-
-Both factors track parameter count, which is why the speedup grows monotonically: **Small (+20% slower) → Medium (~tie) → Large (−16% faster)**. The bandwidth analysis from the previous article was right *for the GEMM path* — but only at large enough K and N that the GEMM actually dominates total TTFT.
 
 ---
 
@@ -456,9 +448,9 @@ The `--bf16` build affects three distinct code paths very differently, and only 
 
 **Custom kernels (softmax, layernorm, residual add, GELU):** Bandwidth-bound. With BF16 storage they read/write half the bytes, so they get roughly the bandwidth-ratio speedup. On H100 (~3.35 TB/s) vs 5080 (~960 GB/s), the *kernel-level* H100 advantage is ~3.5× on those kernels. But they collectively account for only ~5% of total wall time, so the absolute saving is diluted to a few percent end-to-end.
 
-**cuBLAS GEMMs at large M (prefill, M ≈ 965):** With BF16 inputs and `CUBLAS_COMPUTE_32F` accumulator, cuBLAS dispatches to `cutlass_*_tensorop_*` kernels — tensor cores engage on H100. Per-kernel throughput rockets from ~67 FP32 TFLOPS to ~989 BF16 TFLOPS. But end-to-end TTFT only shows a ~9% BF16 win on Large H100, because the GEMMs at this prompt size are already short enough that the non-GEMM portion of TTFT becomes the binding constraint. That portion is two distinct things: (a) the non-GEMM GPU kernels themselves (softmax, layernorm, mask check) — bandwidth-bound, so mostly invariant to dtype but they *do* run faster on H100's HBM3 than on the 5080's GDDR7; and (b) host overhead (kernel launch dispatch, per-layer sync, tokenizer round-trip, sampling, JSON logging) — which truly doesn't depend on dtype or GPU at all. The ~44 ms of non-GEMM time measured at 1024 tokens (post-fix profile table above) lumps both together and is mostly invariant in this experiment. H100 makes the GEMM term smaller; it can shave a small amount off the non-GEMM kernel term, but it can't touch the host portion.
+**cuBLAS GEMMs at large M (prefill, M ≈ 965):** With BF16 inputs and `CUBLAS_COMPUTE_32F` accumulator, cuBLAS dispatches to `cutlass_*_tensorop_*` kernels — tensor cores engage on H100. Per-kernel throughput rockets from ~67 FP32 TFLOPS to ~989 BF16 TFLOPS (H100 spec/peak — measured throughput is lower; this is the upper bound the tensor cores are advertised at). But end-to-end TTFT only shows a ~9% BF16 win on Large H100, because the GEMMs at this prompt size are already short enough that the non-GEMM portion of TTFT becomes the binding constraint. That portion is two distinct things: (a) the non-GEMM GPU kernels themselves (softmax, layernorm, mask check) — bandwidth-bound, so mostly invariant to dtype but they *do* run faster on H100's HBM3 than on the 5080's GDDR7; and (b) host overhead (kernel launch dispatch, per-layer sync, tokenizer round-trip, sampling, JSON logging) — which truly doesn't depend on dtype or GPU at all. The ~44 ms of non-GEMM time measured at 1024 tokens (post-fix profile table above) lumps both together and is mostly invariant in this experiment. H100 makes the GEMM term smaller; it can shave a small amount off the non-GEMM kernel term, but it can't touch the host portion.
 
-**cuBLAS GEMMs at M = 1 (decode):** cuBLAS picks GEMV-shaped kernels (`gemvx`) regardless of dtype, regardless of hardware, regardless of compute mode — *tensor cores never engage at M = 1*. That isn't a flag we forgot to set, and it isn't fixable by `CUBLAS_COMPUTE_32F_FAST_16BF` or any other compute-type knob; it's a kernel-selection consequence of the GEMM shape (one row × n columns). H100's headline 989 BF16 TFLOPS aren't dormant by mistake — they're not addressable from this code path at all. So the only H100 advantage on decode is its higher HBM bandwidth on the GEMV weight reads, which is small in absolute terms (≲ 1 ms saved per Large token) and gets buried by the same per-token overhead as before: ~16 ms wall-clock on Large, most of which is host code, sync, and the tokenizer socket round-trip.
+**cuBLAS GEMMs at M = 1 (decode):** cuBLAS picks GEMV-shaped kernels (`gemvx`) regardless of dtype, regardless of hardware, regardless of compute mode — *tensor cores never engage at M = 1*. That isn't a flag we forgot to set or any other compute-type knob; it's a kernel-selection consequence of the GEMM shape (one row × n columns). H100's headline 989 BF16 TFLOPS aren't dormant by mistake — they're not addressable from this code path at all. So the only H100 advantage on decode is its higher HBM bandwidth on the GEMV weight reads, which is small in absolute terms (≲ 1 ms saved per Large token) and gets buried by the same per-token overhead as before: ~16 ms wall-clock on Large, most of which is host code, sync, and the tokenizer socket round-trip.
 
 **The unifying point**: "BF16" in this codebase is a *storage* optimization. The compute path is BF16-input → FP32-accumulator → tensor-op at large M, GEMV-on-CUDA-cores at small M. To exploit H100's headline tensor-core throughput at decode would require changing the *shape* of decode itself — fused decoder kernels that don't dispatch a fresh cuBLAS call per layer per matmul, batched generation that lifts M off 1, or speculative decoding that turns one verification step into a multi-row GEMM. None of those are dtype changes. They're orthogonal to the FP32→BF16 work this article covers.
 
@@ -510,14 +502,14 @@ The cuBLAS dispatcher selected H100-native tensor-op kernels automatically — n
 | H100 advantage is bounded by Amdahl on host | ✓ | Ceiling is 2.24× even with infinite GPU, on this workload as currently structured |
 | Next ~2× requires *shape* changes, not silicon | ✓ | Confirmed quantitatively |
 
-### Was the spend worth it?
+### What the H100 confirmed
 
-Yes. ~$3 of total cloud time across two runs confirmed four things the 5080 data alone couldn't:
+Four things the 5080 data alone couldn't:
 
 - The M-based explanation is hardware-independent — it isn't an artifact of consumer Blackwell.
 - Buying more raw FLOPs doesn't help when the bottleneck is fixed per-token host overhead; H100 and 5080 share the same kernel-launch latency (~5 µs), the same tokenizer-socket round-trip, the same per-layer sync structure.
 - Tensor cores *do* engage on H100 for the BF16 build at large M (verified directly by the `nvjet_tst_*` kernel attribution in the nsys trace) — the ties on wall clock aren't because tensor cores were silently dormant.
-- The codebase's next optimization should target the *shape* of the work (decode batching, kernel fusion, `cublasLt` for small-M dispatch), not the precision. The Amdahl ceiling on this workload as currently structured is ~2.24× — to get past it, the execution shape itself has to change (CUDA Graphs, async tokenizer, batched dispatch), since no GPU upgrade alone can move the host portion.
+- The codebase's next optimization should target the *shape* of the work (decode batching, kernel fusion), not the precision. The Amdahl ceiling on this workload as currently structured is ~2.24× — to get past it, the execution shape itself has to change, since no GPU upgrade alone can move the host portion.
 
 The two-run pattern (one benchmark for clean wall-clock numbers, one with `--profile` for the kernel-level breakdown) is what got both the headline TPS comparison *and* the diagnosis behind it. Either run alone would have left an open question.
 
@@ -525,82 +517,14 @@ The Lambda runbook ([`docs/h100_lambda_run.md`](../../h100_lambda_run.md)) is re
 
 ---
 
-## Where the 15× goes — three serial dilutions
-
-Pulling the 5080 and H100 data together raises one last question: BF16 tensor cores are advertised at ~15× the throughput of the FP32 CUDA-core path on the same hardware (true for both the 5080 and the H100). Why does the wall-clock end-to-end win come out to just 1.30× (1024-token Large prefill on the 5080) — and why doesn't the H100, with its 3.5× more bandwidth and ~15× more BF16 tensor-core peak, push that any higher?
-
-The answer is that 15× is the **kernel-peak ratio for an idealized tensor-op kernel**, and three serial dilutions stand between that ratio and what a user sees in TTFT. Each one is real, each one is measurable from the data already in this article (5080 prefill profiles + H100 nsys breakdown), and each one corresponds to a different optimization lever.
-
-```
-15× peak BF16 vs FP32 tensor-core throughput
-      ↓ (cuBLAS efficiency at our shapes)
-~3.3× actual GEMM kernel speedup
-      ↓ (non-GEMM kernels don't get the tensor-core win)
-~1.84× total kernel-time speedup
-      ↓ (host overhead is invariant across dtypes)
-~1.30× end-to-end wall-clock speedup
-```
-
-### Layer 1: 15× → 3.3× — cuBLAS doesn't deliver peak at our shapes
-
-Nvidia's "989 BF16 TFLOPS" (H100) or "419 BF16 TFLOPS" (RTX 5080) is a **peak number** that assumes ideal kernels at ideal sizes. Real cuBLAS GEMMs achieve a fraction of that, depending heavily on the M, K, N triple. For Large prefill at 1024 tokens, the typical GEMM is `1024 × 1280 × 1280` (attention) or `1024 × 1280 × 5120` (FFN). At those dimensions cuBLAS picks `cutlass_*_tensorop_*` kernels (verified in the 5080 post-fix profile and in the H100 `nvjet_tst_*` attribution) but achieves roughly 30–50% of peak tensor-core utilization — typical numbers for one-off, non-batched shapes where the algorithm-selection heuristic doesn't have batched amortization to help it.
-
-Measured directly in the 5080 post-fix profile:
-- FP32 GEMM kernel time: **73.2 ms** (using `cutlass simt GEMM` — the FP32 CUDA-core path)
-- BF16 GEMM kernel time: **22.1 ms** (using `cutlass tensor-op GEMM` — tensor cores engaged)
-- **GEMM-only speedup: 73.2 / 22.1 ≈ 3.3×**
-
-The 15× → 3.3× drop here is **the largest single dilution in the chain**, and it has nothing to do with host overhead. It's pure peak-vs-achieved at the kernel level. Bigger M (batched inference, speculative decoding) would push this number toward peak; staying at M ≈ 1000 with one-off heuristic dispatch leaves it at ~3.3×.
-
-### Layer 2: 3.3× → 1.84× — non-GEMM kernels stay put
-
-After GEMM is sped up 3.3×, GEMM is no longer the dominant kernel. The other kernels — softmax, layernorm, gelu, add_bias, concat_heads — **don't benefit from BF16 compute** (we covered why earlier: they're reductions or elementwise, no multiply-accumulate split, no tensor-core path available). Their absolute time stays roughly the same in BF16 — these are still GPU kernels that scale with memory bandwidth, but the dtype change doesn't move them.
-
-From the same 5080 post-fix table:
-
-| Kernel category | FP32 time | BF16 time | Speedup |
-|---|---:|---:|---:|
-| GEMM only (`cutlass simt` → `cutlass tensorop`) | 73.2 ms | 22.1 ms | **3.32×** |
-| Everything else (softmax, layernorm, gelu, add_bias, concat_heads, splitKreduce, …) | 43.8 ms | 42.9 ms | 1.02× |
-| **Total kernel time** | **117 ms** | **65 ms** | **1.80×** |
-
-Pure Amdahl's law on the GPU side: GEMM was 62% of FP32 kernel time, so the maximum achievable kernel-total speedup (with infinite GEMM speedup, non-GEMM unchanged) would be `1 / (0.38 + 0) = 2.63×`. With a finite 3.3× GEMM speedup it lands at `1 / (0.38 + 0.62/3.3) = 1.81×`. Almost half the GEMM win evaporates here, before host overhead enters the picture at all.
-
-### Layer 3: 1.84× → 1.30× — host overhead is invariant
-
-The last dilution is the host-overhead one the H100 nsys breakdown above quantified directly (~50% of decode wall clock; ~45% on the mixed prefill preset). Host time per prefill — kernel launch dispatch, per-layer `cudaDeviceSynchronize`, the tokenizer socket round-trip, logit sampling on the CPU, JSON-logging glue — is **mostly invariant to the dtype change** because none of those things touch the GPU at all. (It would shift if we reorganised the execution shape — CUDA Graphs, async tokenizer — but in this experiment, swapping FP32 for BF16 doesn't move it.)
-
-Solving from the 5080 1024-token prefill measurements:
-
-```
-host_overhead = TTFT_BF16 − kernel_BF16 = 172 ms − 65 ms = 107 ms
-
-Sanity check: TTFT_FP32 = host_overhead + kernel_FP32
-                       = 107 ms + 117 ms
-                       = 224 ms ✓ (measured: 224.5 ms)
-
-End-to-end speedup = (107 + 117) / (107 + 65)
-                   = 224 / 172
-                   = 1.30×
-```
-
-So 107 ms of constant host overhead reduces a 1.80× kernel speedup to 1.30× wall clock. That's roughly a 28% additional dilution — meaningful, but **the smallest of the three layers**, which often surprises people. The mental model "host overhead is the bottleneck" is correct in *direction* but understates the role of the prior two layers.
-
-### What each layer responds to
-
-Putting the chain in one table to make the optimization choices explicit:
-
-| Dilution layer | What we lost | What lifts it |
-|---|---|---|
-| Peak vs cuBLAS achieved (15× → 3.3×) | ~78% | bigger M (batched inference, speculative decoding); `cublasLt` with explicit algo pinning; persistent kernels |
-| GEMM share of kernel total (3.3× → 1.8×) | ~45% | kernel fusion (fold non-GEMM work into the GEMM epilogue); fuse adjacent custom kernels so they share a single launch |
-| Host overhead invariance (1.8× → 1.3×) | ~28% | CUDA Graphs (capture-once, replay); async tokenizer; batched logit sampling; remove per-layer syncs |
-
-Reaching 4–5× wall-clock speedup over FP32 on the same hardware would require chipping at all three layers, not just the host one. None of them are precision changes; all of them are *shape* and *orchestration* changes — which is also why the H100, with its 15× more BF16 tensor-core peak and 3.5× more bandwidth, doesn't break the 1.3× ceiling either. The dilution chain is a property of the *code*, not the silicon.
-
----
-
 ## Lessons learned
+
+The two regimes have fundamentally different bottlenecks, and BF16 only helps one of them:
+
+- **Prefill is compute-bound** when `M` is large enough (≳128 tokens) for tensor cores to engage. BF16 wins here because cuBLAS dispatches to tensor-op kernels that are ~3× faster than the FP32 CUDA-core path.
+- **Decode is memory-bandwidth-bound at `M = 1`**, with a meaningful share of wall time spent in host overhead (kernel launch dispatch, sync, tokenizer round-trip). BF16 helps the bandwidth half by halving weight reads, but the host half is unchanged — so the end-to-end win is small.
+
+The rest of the lessons follow from this split.
 
 The BF16 story for this codebase comes down to one variable — `M`, the number of GEMM rows being multiplied. After the mask fix:
 
