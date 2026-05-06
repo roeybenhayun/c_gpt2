@@ -14,7 +14,7 @@ Spoiler: it's more complicated than that. The implementation worked end-to-end, 
 - **Decode results & investigation** — the headline TPS numbers, why BF16 didn't help on Large, the mask-kernel bug found while testing the prefill hypothesis, and the fix.
 - **Prefill results** — formal TTFT numbers showing the *mirror image* of decode: BF16 win grows with model size.
 - **Scoreboard & H100 cross-check** — before/after table, then the same code on a Lambda Cloud H100 confirming the bottleneck is host-side, not silicon.
-- **Synthesis & next steps** — how a 15× peak-tensor-core ratio dilutes down to 1.30× wall-clock, lessons learned, and exploration paths from here.
+- **Lessons learned & next steps** — the regime split between prefill and decode, and four directions worth exploring from here.
 
 ## Reminder — what the previous article did
 
@@ -538,23 +538,14 @@ Two takeaways that generalize beyond this codebase:
 
 ---
 
-## What's next — exploration, not commitment
+## What's next
 
-The small-`M` regime is what's left, and decode is the canonical case (`M = 1`, every step, no exceptions). My first instinct was to fight cuBLAS at its own game: switch from `cublasGemmEx` to `cublasLtMatmul`, force a non-split-K algorithm to kill the `splitKreduce` overhead, cache the algorithm per shape, and try to pin a tensor-op kernel for small `M`. Plausible on paper. But a quick look at how production inference engines actually handle decode suggests this is the wrong lever:
+Four directions worth exploring from here:
 
-- **llama.cpp** stops calling cuBLAS entirely for decode. Prefill goes through cuBLAS / CUTLASS GEMMs (large `M`, tensor cores engage naturally), but at `M = 1` it dispatches its own `dequantize_mul_mat_vec` (DMMV) and `mul_mat_vec_q` (MMVQ) kernels — hand-written GEMVs with vectorised loads and warp-level reductions, fused with dequantisation when weights are quantised.
-- **vLLM** and **TensorRT-LLM** follow the same playbook: cuBLAS / CUTLASS for prefill, custom kernels (Triton or hand-written CUDA) for the `M = 1..few` decode regime, plus paged-attention KV-cache layouts to keep the bandwidth picture sane.
-
-The shared insight is that **at `M = 1` you're memory-bandwidth-bound, not compute-bound**. Forcing tensor cores on a memory-bound workload doesn't help — the bytes-per-token of weights moved from HBM is the wall. That's why the community-wide answer to "make decode faster" is *quantisation* (Q8 → Q4 → Q2), which directly cuts weight traffic 2×–8×, far beyond what any cuBLAS algorithm shuffle could deliver. BF16 is the same story at half-resolution: the 2× bandwidth reduction is the entire mechanism.
-
-So the open question for this codebase isn't "which `cublasLtMatmul` flag", it's:
-
-- **Custom decode GEMV** — port the DMMV pattern to BF16 weights and see whether a hand-written kernel beats cuBLAS's GEMV dispatch at `M = 1`. Smallest scope, most direct comparison.
+- **Custom decode GEMV kernel** — port the DMMV (llama.cpp implementation) pattern to BF16 weights and see whether a hand-written kernel beats cuBLAS's GEMV dispatch at `M = 1`. Smallest scope, most direct comparison.
 - **Weight-only quantisation** — Q8 first, then Q4 if that works. Largest expected speedup but also the largest engineering investment (packing format, dequant kernels, accuracy checks).
 - **Kernel fusion** — collapse the small kernels between matmuls so activations stop round-tripping through VRAM. Independent of the GEMV question.
 - **Or step away from inference entirely** — the GPT-2 training path is its own untouched problem (forward + backward + optimizer state, completely different bandwidth and memory profile). It's not obviously the next inference optimization, but it *is* the next interesting GPU problem in this codebase.
-
-These are exploration paths, not a roadmap. The honest version of "what's next" is: I don't know yet, but the evidence from open-source engines strongly suggests the answer doesn't live inside cuBLAS.
 
 ---
 
@@ -563,4 +554,4 @@ These are exploration paths, not a roadmap. The honest version of "what's next" 
 - [Building GPT-2 in C — now with KV-Cache and 10x faster inference](https://rbenhayun.substack.com/p/building-gpt-2-small-in-c-a-from)
 - [cuBLAS vs OpenBLAS: Benchmarking Matrix Multiply for GPT-2](https://rbenhayun.substack.com/p/2d-dot-product-using-gpu-and-cpu)
 - [GPT-2 in C — now on GPU with 9× faster inference](https://rbenhayun.substack.com/p/gpt-2-in-c-now-on-gpu-with-9-faster)
-- Code: [github.com/roeybenhayun/c_gpt2](https://github.com/roeybenhayun/c_gpt2)
+
