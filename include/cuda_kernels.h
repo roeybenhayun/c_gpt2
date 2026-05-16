@@ -56,6 +56,19 @@ void concat_heads_cuda(act_t *src, act_t *dest, int token_index, int _nof_heads,
 
 void add_2d_cuda(act_t *a, int a_r, int a_c, act_t *b, act_t * out);
 
+#if defined(USE_INT8)
+/* Per-token dynamic INT8 quantization of an activation matrix.
+ *   X       in:  [tokens, d] BF16
+ *   X_q     out: [tokens, d] INT8
+ *   scale_X out: [tokens] FP32 (= amax_per_row / 127)
+ * Defined in cuda/activation_quant.cu, only under USE_INT8. */
+void per_token_quant_cuda(const act_t *X,
+                          qweight_t *X_q,
+                          qscale_t  *scale_X,
+                          int tokens,
+                          int d);
+#endif
+
 
 #ifdef __cplusplus
 }
