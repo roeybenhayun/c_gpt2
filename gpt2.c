@@ -18,6 +18,7 @@
 #include <arpa/inet.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <errno.h>
 #include <jansson.h>
 
 #ifdef USE_GPU
@@ -592,6 +593,24 @@ weight_t (*layer_norm1_beta)[d_model];
 weight_t (*layer_norm2_gamma)[d_model];
 weight_t (*layer_norm2_beta)[d_model];
 
+#if defined(USE_INT8)
+/* Host-side INT8 weight + scale buffers — staging area for the
+ * quant8.bin load before cudaMemcpy to *_int8_d / *_scale_d. */
+qweight_t (*W_q_int8)[d_model][d_model];
+qweight_t (*W_k_int8)[d_model][d_model];
+qweight_t (*W_v_int8)[d_model][d_model];
+qweight_t (*attn_proj_int8)[d_model][d_model];
+qweight_t (*W1_int8)[d_ff][d_model];
+qweight_t (*W2_int8)[d_model][d_ff];
+
+qscale_t (*W_q_scale)[d_model];
+qscale_t (*W_k_scale)[d_model];
+qscale_t (*W_v_scale)[d_model];
+qscale_t (*attn_proj_scale)[d_model];
+qscale_t (*W1_scale)[d_ff];
+qscale_t (*W2_scale)[d_model];
+#endif
+
 #ifdef USE_CUDA
 int *tokens_d;
 act_t (*embeddings_d)[d_model];
@@ -821,6 +840,13 @@ static void allocate_weights_gpu(void){
 #endif
 static void allocate_weights_cpu(void){
     size_t allocated_size = 0;
+
+    /* Under USE_INT8 the 4 large matmul weights per layer come from the
+     * quant8.bin as INT8 + scale and live in the *_int8 / *_scale host
+     * staging buffers below. The BF16 W_q/W_k/W_v/attn_proj_weight/W1/W2
+     * host buffers are unused in that build, so skip their mallocs.
+     * Biases and LN params are preserved tensors — still allocated. */
+#if !defined(USE_INT8)
     allocated_size += num_layers * sizeof *W_q;
     W_q   =  malloc(num_layers * sizeof *W_q);
 
@@ -829,6 +855,7 @@ static void allocate_weights_cpu(void){
 
     allocated_size += num_layers * sizeof *W_v;
     W_v   =  malloc(num_layers * sizeof *W_v);
+#endif
 
     allocated_size += num_layers * sizeof *b_q;
     b_q   =  malloc(num_layers * sizeof *b_q);
@@ -839,17 +866,21 @@ static void allocate_weights_cpu(void){
     allocated_size += num_layers * sizeof *b_v;
     b_v   =  malloc(num_layers * sizeof *b_v);
 
+#if !defined(USE_INT8)
     allocated_size += num_layers * sizeof *attn_proj_weight;
     attn_proj_weight = malloc(num_layers * sizeof *attn_proj_weight);
+#endif
 
     allocated_size += num_layers * sizeof *attn_proj_bias;
     attn_proj_bias   = malloc(num_layers * sizeof *attn_proj_bias);
 
+#if !defined(USE_INT8)
     allocated_size += num_layers * sizeof *W1;
     W1  = malloc(num_layers * sizeof *W1);
 
     allocated_size += num_layers * sizeof *W2;
     W2  = malloc(num_layers * sizeof *W2);
+#endif
 
     allocated_size += num_layers * sizeof *b1;
     b1  = malloc(num_layers * sizeof *b1);
@@ -873,8 +904,33 @@ static void allocate_weights_cpu(void){
     // Small 340M, Medium 1.2G, Large 2.8G
     //printf("Total allocated memory = %zu\n",allocated_size);
                                 
+#if !defined(USE_INT8)
     if (!W_q || !W_k) { perror("malloc"); exit(1); }
-    
+#endif
+
+#if defined(USE_INT8)
+    /* Host-side INT8 staging buffers. Same per-layer flat layout as the
+     * BF16 buffers above; populated by load_all_weights from quant8.bin
+     * and copied to *_int8_d / *_scale_d in copy_weights_to_gpu. */
+    W_q_int8        = malloc(num_layers * sizeof *W_q_int8);
+    W_k_int8        = malloc(num_layers * sizeof *W_k_int8);
+    W_v_int8        = malloc(num_layers * sizeof *W_v_int8);
+    attn_proj_int8  = malloc(num_layers * sizeof *attn_proj_int8);
+    W1_int8         = malloc(num_layers * sizeof *W1_int8);
+    W2_int8         = malloc(num_layers * sizeof *W2_int8);
+
+    W_q_scale        = malloc(num_layers * sizeof *W_q_scale);
+    W_k_scale        = malloc(num_layers * sizeof *W_k_scale);
+    W_v_scale        = malloc(num_layers * sizeof *W_v_scale);
+    attn_proj_scale  = malloc(num_layers * sizeof *attn_proj_scale);
+    W1_scale         = malloc(num_layers * sizeof *W1_scale);
+    W2_scale         = malloc(num_layers * sizeof *W2_scale);
+
+    if (!W_q_int8 || !W_q_scale || !W1_int8 || !W2_int8) {
+        perror("malloc (int8 staging)"); exit(1);
+    }
+#endif
+
 }
 
 static void update_layer_table(void){
@@ -1362,6 +1418,40 @@ static int parse_tokens(const char *json, int *tokens, int max_tokens) {
     return count; // number of tokens parsed
 }
 
+#if defined(USE_INT8)
+// On-disk alignment of every block written by the offline quant tool.
+// Must match tools/offline_quant/src/writer.py ALIGNMENT.
+#define QUANT8_BIN_ALIGNMENT 16
+
+static void quant8_skip_pad(size_t bytes_read, FILE *fp) {
+    size_t pad = (QUANT8_BIN_ALIGNMENT - (bytes_read % QUANT8_BIN_ALIGNMENT)) % QUANT8_BIN_ALIGNMENT;
+    if (pad && fseek(fp, (long)pad, SEEK_CUR) != 0) {
+        fprintf(stderr, "Error: fseek over %zu bytes of alignment padding failed.\n", pad);
+        exit(1);
+    }
+}
+
+// Read one INT8 weight block immediately followed by its FP32 per-output-channel
+// scale vector. Each block is padded to QUANT8_BIN_ALIGNMENT bytes on disk.
+static void fread_int8_with_scale_or_exit(
+    qweight_t *dest_int8, size_t int8_count,
+    qscale_t  *dest_scale, size_t scale_count,
+    FILE *fp)
+{
+    if (fread(dest_int8, sizeof(qweight_t), int8_count, fp) != int8_count) {
+        fprintf(stderr, "Error: fread of %zu int8 weights failed or EOF.\n", int8_count);
+        exit(1);
+    }
+    quant8_skip_pad(int8_count * sizeof(qweight_t), fp);
+
+    if (fread(dest_scale, sizeof(qscale_t), scale_count, fp) != scale_count) {
+        fprintf(stderr, "Error: fread of %zu fp32 scales failed or EOF.\n", scale_count);
+        exit(1);
+    }
+    quant8_skip_pad(scale_count * sizeof(qscale_t), fp);
+}
+#endif
+
 // Read `count` FP32 elements from disk into a weight_t buffer, converting
 // element-by-element when the build dtype is narrower than FP32.
 // On-disk format is always FP32 — only the in-memory representation changes.
@@ -1397,11 +1487,14 @@ static void copy_weights_to_gpu(void){
     CUDA_CHECK(cudaMemcpy(wpe_d,  wpe, ctx_len * sizeof(*wpe_d),cudaMemcpyHostToDevice));
     //CUDA_CHECK(cudaMemcpy(wte_T_d,wte_T, sizeof (*wte_T),cudaMemcpyHostToDevice));
 
+#if !defined(USE_INT8)
+    /* BF16 GEMM weights — replaced by *_int8_d + *_scale_d under USE_INT8.
+     * The host source buffers are not allocated in that build, so skip the copy. */
     CUDA_CHECK(cudaMemcpy(W_q_d,  W_q, num_layers * sizeof (*W_q_d),cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(W_k_d,  W_k, num_layers * sizeof (*W_k_d),cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(W_v_d,  W_v, num_layers * sizeof (*W_v_d),cudaMemcpyHostToDevice));
-
     CUDA_CHECK(cudaMemcpy(attn_proj_weight_d,  attn_proj_weight, num_layers * sizeof (*attn_proj_weight_d),cudaMemcpyHostToDevice));
+#endif
     CUDA_CHECK(cudaMemcpy(attn_proj_bias_d,  attn_proj_bias, num_layers * sizeof (*attn_proj_bias_d),cudaMemcpyHostToDevice));
 
     CUDA_CHECK(cudaMemcpy(b_q_d,  b_q, num_layers * sizeof (*b_q_d),cudaMemcpyHostToDevice));
@@ -1414,31 +1507,82 @@ static void copy_weights_to_gpu(void){
     CUDA_CHECK(cudaMemcpy(layer_norm2_beta_d,  layer_norm2_beta, num_layers * sizeof (*layer_norm2_beta_d),cudaMemcpyHostToDevice));
 
 
+#if !defined(USE_INT8)
+    /* BF16 W1/W2 — replaced by *_int8_d + *_scale_d under USE_INT8. */
     CUDA_CHECK(cudaMemcpy(W1_d,  W1, num_layers * sizeof (*W1_d),cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(b1_d,  b1, num_layers * sizeof (*b1_d),cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(W2_d,  W2, num_layers * sizeof (*W2_d),cudaMemcpyHostToDevice));
+#endif
+    CUDA_CHECK(cudaMemcpy(b1_d,  b1, num_layers * sizeof (*b1_d),cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(b2_d,  b2, num_layers * sizeof (*b2_d),cudaMemcpyHostToDevice));
 
     CUDA_CHECK(cudaMemcpy(layer_normf_gamma_d, layer_normf_gamma, d_model * sizeof(weight_t), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(layer_normf_beta_d, layer_normf_beta, d_model * sizeof(weight_t), cudaMemcpyHostToDevice));
 
+#if defined(USE_INT8)
+    /* Copy INT8 weight buffers + their per-output-channel FP32 scales.
+     * The BF16 weight cudaMemcpys above remain — they target the BF16
+     * device buffers which carry uninitialized data under USE_INT8 and
+     * will be skipped once the GEMM call sites are switched to the INT8
+     * dispatch in phase 4. */
+    CUDA_CHECK(cudaMemcpy(W_q_int8_d,        W_q_int8,        num_layers * sizeof *W_q_int8_d,        cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(W_k_int8_d,        W_k_int8,        num_layers * sizeof *W_k_int8_d,        cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(W_v_int8_d,        W_v_int8,        num_layers * sizeof *W_v_int8_d,        cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(attn_proj_int8_d,  attn_proj_int8,  num_layers * sizeof *attn_proj_int8_d,  cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(W1_int8_d,         W1_int8,         num_layers * sizeof *W1_int8_d,         cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(W2_int8_d,         W2_int8,         num_layers * sizeof *W2_int8_d,         cudaMemcpyHostToDevice));
+
+    CUDA_CHECK(cudaMemcpy(W_q_scale_d,        W_q_scale,        num_layers * sizeof *W_q_scale_d,        cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(W_k_scale_d,        W_k_scale,        num_layers * sizeof *W_k_scale_d,        cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(W_v_scale_d,        W_v_scale,        num_layers * sizeof *W_v_scale_d,        cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(attn_proj_scale_d,  attn_proj_scale,  num_layers * sizeof *attn_proj_scale_d,  cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(W1_scale_d,         W1_scale,         num_layers * sizeof *W1_scale_d,         cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(W2_scale_d,         W2_scale,         num_layers * sizeof *W2_scale_d,         cudaMemcpyHostToDevice));
+#endif
+
     CUDA_CHECK(cudaDeviceSynchronize());
-    
+
 #endif
 
 }
 
 static void load_all_weights(FILE* fp){
-    // token + position embeddings
+    // token + position embeddings — preserved as FP32 on disk under both builds.
     fread_weights_or_exit(&wte[0][0], (size_t)vocab_size*d_model, fp);
     fread_weights_or_exit(&wpe[0][0], (size_t)ctx_len*d_model, fp);
+
+#if defined(USE_INT8)
+    /* Per-layer INT8 staging buffer for the packed W_qkv block before
+     * splitting into per-row Q/K/V. Each block on disk is INT8 [3*d_model,
+     * d_model] followed by FP32 scale[3*d_model], 16-byte aligned. */
+    static qweight_t temp_W_qkv_int8[3*d_model][d_model];
+    static qscale_t  temp_W_qkv_scale[3*d_model];
+#endif
 
     for (int l = 0; l < num_layers; l++){
 
         fread_weights_or_exit(layer[l].ln1_gamma, d_model, fp);//ln_1.weight
         fread_weights_or_exit(layer[l].ln1_beta,  d_model, fp);//ln_1.bias
-        fread_weights_or_exit(&temp_attn_weight[0][0], (size_t)d_model * 3 * d_model, fp);
 
+#if defined(USE_INT8)
+        /* INT8 W_qkv + scale, then split rows 0..d_model-1 → Q,
+         * d_model..2*d_model-1 → K, 2*d_model..3*d_model-1 → V.
+         * Same row-split as the FP32 path; scale vector splits the same way. */
+        fread_int8_with_scale_or_exit(
+            &temp_W_qkv_int8[0][0], (size_t)3*d_model*d_model,
+            &temp_W_qkv_scale[0],   (size_t)3*d_model,
+            fp);
+        for (int i = 0; i < d_model; i++) {
+            for (int j = 0; j < d_model; j++) {
+                W_q_int8[l][i][j] = temp_W_qkv_int8[i][j];
+                W_k_int8[l][i][j] = temp_W_qkv_int8[i + d_model][j];
+                W_v_int8[l][i][j] = temp_W_qkv_int8[i + 2*d_model][j];
+            }
+            W_q_scale[l][i] = temp_W_qkv_scale[i];
+            W_k_scale[l][i] = temp_W_qkv_scale[i + d_model];
+            W_v_scale[l][i] = temp_W_qkv_scale[i + 2*d_model];
+        }
+#else
+        fread_weights_or_exit(&temp_attn_weight[0][0], (size_t)d_model * 3 * d_model, fp);
         for (int i = 0; i < d_model; i++) {
             for (int j = 0; j < d_model; j++) {
                 layer[l].W_q[i * d_model + j] = temp_attn_weight[i][j];               // rows 0–767
@@ -1446,21 +1590,48 @@ static void load_all_weights(FILE* fp){
                 layer[l].W_v[i * d_model + j] = temp_attn_weight[i + 2 * d_model][j]; // rows 1536–2303
             }
         }
+#endif
+
+        /* QKV bias is preserved (FP32 in the .bin under both builds);
+         * existing FP32→BF16 path handles the cast. */
         fread_weights_or_exit(temp_attn_bias, 3*d_model, fp);
         for (int i = 0; i < d_model; i++) {
             layer[l].b_q[i] = temp_attn_bias[i];
             layer[l].b_k[i] = temp_attn_bias[d_model + i];
             layer[l].b_v[i] = temp_attn_bias[2*d_model + i];
         }
+
+#if defined(USE_INT8)
+        fread_int8_with_scale_or_exit(
+            &attn_proj_int8[l][0][0], (size_t)d_model*d_model,
+            &attn_proj_scale[l][0],   (size_t)d_model,
+            fp);
+#else
         fread_weights_or_exit(layer[l].attn_proj_weight, (size_t)d_model*d_model, fp);//attn.c_proj.weight
+#endif
         fread_weights_or_exit(layer[l].attn_proj_bias,   d_model, fp);//attn.c_proj.bias
 
         fread_weights_or_exit(layer[l].ln2_gamma, d_model, fp);//ln_2.weight
         fread_weights_or_exit(layer[l].ln2_beta,  d_model, fp);//ln_2.bias
 
+#if defined(USE_INT8)
+        fread_int8_with_scale_or_exit(
+            &W1_int8[l][0][0], (size_t)d_ff*d_model,
+            &W1_scale[l][0],   (size_t)d_ff,
+            fp);
+#else
         fread_weights_or_exit(layer[l].W1, (size_t)d_model*d_ff, fp);//mlp.c_fc.weight
+#endif
         fread_weights_or_exit(layer[l].b1, d_ff, fp);//mlp.c_fc.bias
+
+#if defined(USE_INT8)
+        fread_int8_with_scale_or_exit(
+            &W2_int8[l][0][0], (size_t)d_model*d_ff,
+            &W2_scale[l][0],   (size_t)d_model,
+            fp);
+#else
         fread_weights_or_exit(layer[l].W2, (size_t)d_ff*d_model, fp);//mlp.c_proj.weight
+#endif
         fread_weights_or_exit(layer[l].b2, d_model, fp);//mlp.c_proj.bias
     }
     // final layer norm
@@ -1539,7 +1710,17 @@ int main(int argc, char *argv[])
 
     // 
     // Open the file containing the weights, load all the weights and close it
-    FILE * fp = fopen(MODEL_WEIGHTS_FILENAME,"rb");
+#if defined(USE_INT8)
+    const char *weights_filename = MODEL_QUANT8_WEIGHTS_FILENAME;
+#else
+    const char *weights_filename = MODEL_WEIGHTS_FILENAME;
+#endif
+    FILE * fp = fopen(weights_filename,"rb");
+    if (!fp) {
+        fprintf(stderr, "FATAL: cannot open weights file '%s' (errno %d)\n",
+                weights_filename, errno);
+        exit(1);
+    }
     //printf("filed is opened\n");
     load_all_weights(fp);
     fclose(fp);
