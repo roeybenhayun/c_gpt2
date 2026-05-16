@@ -1,0 +1,10 @@
+[project]
+name = "offline-quant"
+version = "0.1.0"
+description = "Offline INT8 weight quantization for c_gpt2 (Phase 1 of W8A8)"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.26",
+    "matplotlib",
+    "questionary",
+]
