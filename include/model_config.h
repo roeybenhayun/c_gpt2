@@ -12,6 +12,7 @@
     #define num_layers (12)
     #define nof_heads (12)
     #define MODEL_WEIGHTS_FILENAME "weights/gpt2_c_weights.bin"
+    #define MODEL_QUANT8_WEIGHTS_FILENAME "weights/gpt2_small_quant8.bin"
     #define GPT2_PERFORMANCE_JSON_FILE_NAME "./logs/gpt2_small_performance.json"
     #define MODEL "gpt2_small"
 #elif defined(GPT2_MEDIUM_MODEL)
@@ -19,6 +20,7 @@
     #define num_layers (24)
     #define nof_heads (16)
     #define MODEL_WEIGHTS_FILENAME "weights/gpt2_medium_c_weights.bin"
+    #define MODEL_QUANT8_WEIGHTS_FILENAME "weights/gpt2_medium_quant8.bin"
     #define GPT2_PERFORMANCE_JSON_FILE_NAME "./logs/gpt2_medium_performance.json"
     #define MODEL "gpt2_medium"
 #elif defined(GPT2_LARGE_MODEL)
@@ -26,6 +28,7 @@
     #define num_layers (36)
     #define nof_heads (20)
     #define MODEL_WEIGHTS_FILENAME "weights/gpt2_large_c_weights.bin"
+    #define MODEL_QUANT8_WEIGHTS_FILENAME "weights/gpt2_large_quant8.bin"
     #define GPT2_PERFORMANCE_JSON_FILE_NAME "./logs/gpt2_large_performance.json"
     #define MODEL "gpt2_large"
 #else
@@ -59,6 +62,21 @@
     typedef float act_t;
     typedef float weight_t;
     #define DTYPE_NAME "fp32"
+#endif
+
+// USE_INT8: weight-only INT8 (W8A8 at GEMM time). Composes with USE_BF16 —
+// the preserved tensors (embeddings, LN, biases) stay in weight_t / act_t,
+// only the 4 large matmul weights per layer become qweight_t with an
+// associated FP32 per-output-channel scale (qscale_t).
+#if defined(USE_INT8)
+    #if !defined(USE_BF16)
+        #error "USE_INT8 requires USE_BF16 (INT8 weights, BF16 activations)"
+    #endif
+    #include <stdint.h>
+    typedef int8_t qweight_t;
+    typedef float  qscale_t;
+    #undef  DTYPE_NAME
+    #define DTYPE_NAME "int8+bf16"
 #endif
 
 // Device-side narrow<->float helpers. In FP32 builds these are identity

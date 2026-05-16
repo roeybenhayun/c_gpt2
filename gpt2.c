@@ -328,6 +328,32 @@ static void dot_2d_gpu(act_t *a,int a_r, int a_c, int lda, act_t *b,int b_r,int 
     }
 }
 
+#if defined(USE_INT8)
+// INT8 weight-only GEMM dispatch. Activation X is BF16 on entry; this function
+// is responsible for: quantizing X per-token to INT8, calling cuBLAS INT8 GEMM
+// (A,B = CUDA_R_8I, C = CUDA_R_32I, compute = CUBLAS_COMPUTE_32I), and
+// dequantizing the INT32 output back to BF16 via the fused dequant+bias kernel.
+//
+// Phase 1: stub only — aborts at runtime so the build is green but the INT8
+// path is gated until phases 3–5 land the supporting kernels.
+static void dot_2d_gpu_int8(
+    act_t *x_bf16, int x_r, int x_c, int ldx,
+    qweight_t *w_int8, int w_r, int w_c, int ldw, qscale_t *scale_w,
+    weight_t *bias_bf16,
+    act_t *y_bf16, int y_r, int y_c, int ldy)
+{
+    (void)x_bf16; (void)x_r; (void)x_c; (void)ldx;
+    (void)w_int8; (void)w_r; (void)w_c; (void)ldw; (void)scale_w;
+    (void)bias_bf16;
+    (void)y_bf16; (void)y_r; (void)y_c; (void)ldy;
+    fprintf(stderr,
+        "FATAL: dot_2d_gpu_int8 not implemented yet (Phase 1 stub).\n"
+        "       Build was compiled with USE_INT8 but the runtime INT8 path\n"
+        "       (activation quant + cuBLAS INT8 GEMM + dequant) has not landed.\n");
+    abort();
+}
+#endif
+
 static void print_gpu_memory_usage() {
     size_t free_byte;
     size_t total_byte;
@@ -606,6 +632,29 @@ weight_t (*layer_norm2_beta_d)[d_model];
 weight_t *layer_normf_gamma_d;       // Final Layer Norm Gamma [d_model]
 weight_t *layer_normf_beta_d;        // Final Layer Norm Beta [d_model]
 
+#if defined(USE_INT8)
+/* INT8 quantized weights — parallel to the BF16 pointers above. Only the
+ * 4 large matmul tensors per layer are quantized; the preserved tensors
+ * (LN, biases, embeddings) keep their weight_t storage. Each quantized
+ * tensor has a matching per-output-channel FP32 scale vector.
+ *
+ * QKV is split at load time into Q/K/V buffers so the existing 3-GEMM
+ * forward path can be reused without restructuring. */
+qweight_t (*W_q_int8_d)[d_model][d_model];
+qweight_t (*W_k_int8_d)[d_model][d_model];
+qweight_t (*W_v_int8_d)[d_model][d_model];
+qweight_t (*attn_proj_int8_d)[d_model][d_model];
+qweight_t (*W1_int8_d)[d_ff][d_model];
+qweight_t (*W2_int8_d)[d_model][d_ff];
+
+qscale_t (*W_q_scale_d)[d_model];          // per-output-channel scale, length d_model per layer
+qscale_t (*W_k_scale_d)[d_model];
+qscale_t (*W_v_scale_d)[d_model];
+qscale_t (*attn_proj_scale_d)[d_model];
+qscale_t (*W1_scale_d)[d_ff];              // W1 output dim is d_ff
+qscale_t (*W2_scale_d)[d_model];
+#endif
+
 act_t (*K_cache_d)[ctx_len][d_model]; // Pointer to layers of [ctx_len][d_model]
 act_t (*V_cache_d)[ctx_len][d_model];
 
@@ -718,6 +767,27 @@ static void allocate_weights_gpu(void){
 
     CUDA_CHECK(cudaMalloc((void **)&layer_normf_gamma_d, d_model * sizeof(weight_t)));
     CUDA_CHECK(cudaMalloc((void **)&layer_normf_beta_d, d_model * sizeof(weight_t)));
+
+#if defined(USE_INT8)
+    /* INT8 weight + per-output-channel FP32 scale buffers. The 4 large matmul
+     * tensors per layer (W_qkv split into Q/K/V, attn_proj, W1, W2). The BF16
+     * counterparts above remain allocated but go unused under USE_INT8 — kept
+     * to avoid a structural fork of the alloc/free path in this phase. */
+    CUDA_CHECK(cudaMalloc((void **)&W_q_int8_d,        num_layers * sizeof *W_q_int8_d));
+    CUDA_CHECK(cudaMalloc((void **)&W_k_int8_d,        num_layers * sizeof *W_k_int8_d));
+    CUDA_CHECK(cudaMalloc((void **)&W_v_int8_d,        num_layers * sizeof *W_v_int8_d));
+    CUDA_CHECK(cudaMalloc((void **)&attn_proj_int8_d,  num_layers * sizeof *attn_proj_int8_d));
+    CUDA_CHECK(cudaMalloc((void **)&W1_int8_d,         num_layers * sizeof *W1_int8_d));
+    CUDA_CHECK(cudaMalloc((void **)&W2_int8_d,         num_layers * sizeof *W2_int8_d));
+
+    CUDA_CHECK(cudaMalloc((void **)&W_q_scale_d,        num_layers * sizeof *W_q_scale_d));
+    CUDA_CHECK(cudaMalloc((void **)&W_k_scale_d,        num_layers * sizeof *W_k_scale_d));
+    CUDA_CHECK(cudaMalloc((void **)&W_v_scale_d,        num_layers * sizeof *W_v_scale_d));
+    CUDA_CHECK(cudaMalloc((void **)&attn_proj_scale_d,  num_layers * sizeof *attn_proj_scale_d));
+    CUDA_CHECK(cudaMalloc((void **)&W1_scale_d,         num_layers * sizeof *W1_scale_d));
+    CUDA_CHECK(cudaMalloc((void **)&W2_scale_d,         num_layers * sizeof *W2_scale_d));
+#endif
+
     CUDA_CHECK(cudaMalloc((void **)&tokens_d, ctx_len * sizeof(int)));
     CUDA_CHECK(cudaMalloc((void **)&embeddings_d, ctx_len * sizeof *embeddings_d));
 
