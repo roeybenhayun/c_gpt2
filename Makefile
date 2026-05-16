@@ -18,10 +18,13 @@ $(info DETECTED_ARCH='$(value DETECTED_ARCH)')
 
 # Output directories: out/cpu/ for CPU builds, out/gpu/<dtype>/ for GPU builds.
 # Per-dtype subdir prevents stale fp32 kernel .o files from being linked into
-# a bf16/fp16 host binary (and vice versa).
+# a bf16/fp16 host binary (and vice versa). int8 implies bf16 activations
+# but lands in its own out/gpu/int8/ to keep the .o files separate.
 OUTDIR = ./out
 ifneq (,$(filter gpu,$(MAKECMDGOALS)))
-    ifneq (,$(filter bf16,$(MAKECMDGOALS)))
+    ifneq (,$(filter int8,$(MAKECMDGOALS)))
+        BINDIR = $(OUTDIR)/gpu/int8
+    else ifneq (,$(filter bf16,$(MAKECMDGOALS)))
         BINDIR = $(OUTDIR)/gpu/bf16
     else ifneq (,$(filter fp16,$(MAKECMDGOALS)))
         BINDIR = $(OUTDIR)/gpu/fp16
@@ -33,16 +36,22 @@ else
 endif
 
 # Storage dtype selection: default is fp32 (current behaviour).
-# Add `bf16` or `fp16` to the make goals to switch. These are GPU-only —
+# Add `bf16`, `fp16`, or `int8` to the make goals to switch. These are GPU-only —
 # the CPU path goes through cblas_sgemm, which has no half-precision form.
+# `int8` is checked first because it implies bf16 activations (USE_INT8 requires
+# USE_BF16, so we set both rather than asking the user to type both goals).
 DTYPE_DEF =
-ifneq (,$(filter bf16,$(MAKECMDGOALS)))
+ifneq (,$(filter int8,$(MAKECMDGOALS)))
+    ifeq (,$(filter gpu,$(MAKECMDGOALS)))
+        $(error int8 build requires the gpu target (e.g. 'make gpu int8 small'). CPU int8 has no GEMM backend.)
+    endif
+    DTYPE_DEF = -DUSE_BF16 -DUSE_INT8
+else ifneq (,$(filter bf16,$(MAKECMDGOALS)))
     ifeq (,$(filter gpu,$(MAKECMDGOALS)))
         $(error bf16 build requires the gpu target (e.g. 'make gpu bf16 small'). CPU bf16 has no GEMM backend.)
     endif
     DTYPE_DEF = -DUSE_BF16
-endif
-ifneq (,$(filter fp16,$(MAKECMDGOALS)))
+else ifneq (,$(filter fp16,$(MAKECMDGOALS)))
     ifeq (,$(filter gpu,$(MAKECMDGOALS)))
         $(error fp16 build requires the gpu target (e.g. 'make gpu fp16 small'). CPU fp16 has no GEMM backend.)
     endif
@@ -117,10 +126,10 @@ SRC = gpt2.c
 $(shell mkdir -p $(BINDIR))
 
 # Targets
-.PHONY: all small medium large clean bf16 fp16
+.PHONY: all small medium large clean bf16 fp16 int8
 
-# bf16/fp16 are flag-only goals — they set DTYPE_DEF above and do nothing else.
-bf16 fp16:
+# bf16/fp16/int8 are flag-only goals — they set DTYPE_DEF above and do nothing else.
+bf16 fp16 int8:
 	@:
 
 all: small medium large          # build everything with "make"
