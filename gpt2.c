@@ -265,6 +265,38 @@ static void softmax_2d(act_t *a, int a_r, int a_c,int stride, act_t * c_out){
 }
 
 #ifdef USE_CUDA
+#if defined(USE_INT8)
+/* INT8 tensor cores (IMMA) require compute capability >= 7.5 (Turing).
+ * Older arches (Maxwell SM 5.x, Pascal SM 6.x, Volta SM 7.0/7.2 including
+ * Jetson Xavier NX) lack the dp4a/IMMA instructions that cuBLAS uses for
+ * INT8 GEMM and would either fall back silently to a much slower path or
+ * error out mid-forward-pass. Refuse to start with a clear message instead. */
+static void check_int8_capability_or_exit(void) {
+    int device = 0;
+    cudaError_t err = cudaGetDevice(&device);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "FATAL: cudaGetDevice failed: %s\n", cudaGetErrorString(err));
+        exit(1);
+    }
+    struct cudaDeviceProp prop;
+    err = cudaGetDeviceProperties(&prop, device);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "FATAL: cudaGetDeviceProperties failed: %s\n", cudaGetErrorString(err));
+        exit(1);
+    }
+    int sm = prop.major * 10 + prop.minor;
+    if (sm < 75) {
+        fprintf(stderr,
+            "FATAL: INT8 build requires compute capability 7.5 or higher (Turing or newer).\n"
+            "       Detected: %s, compute capability %d.%d (sm_%d).\n"
+            "       Rebuild this model without the `int8` goal (e.g. `make gpu bf16 <size>`)\n"
+            "       to run on this device.\n",
+            prop.name, prop.major, prop.minor, sm);
+        exit(1);
+    }
+}
+#endif
+
 // Helper function to initialize and get a static cuBLAS handle.
 static cublasHandle_t get_cublas_handle() {
     static bool handle_initialized = false;
@@ -1815,6 +1847,12 @@ static void load_layers_weights(TransformerBlockParams * p_tfb, int layer_id,FIL
 
 int main(int argc, char *argv[])
 {
+#if defined(USE_CUDA) && defined(USE_INT8)
+    /* Fail fast on unsupported GPUs before doing any work — weight load,
+     * tokenizer connect, user prompt, etc. all come after this. */
+    check_int8_capability_or_exit();
+#endif
+
     const int n_tokens = 1024; // TODO:replace with ctx_len
     char input_buffer[MAX_PROMPT_BYTES];
     char encode_request[MAX_JSON_REQUEST_CHARS];
