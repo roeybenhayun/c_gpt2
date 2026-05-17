@@ -330,28 +330,71 @@ static void dot_2d_gpu(act_t *a,int a_r, int a_c, int lda, act_t *b,int b_r,int 
 }
 
 #if defined(USE_INT8)
-// INT8 weight-only GEMM dispatch. Activation X is BF16 on entry; this function
-// is responsible for: quantizing X per-token to INT8, calling cuBLAS INT8 GEMM
-// (A,B = CUDA_R_8I, C = CUDA_R_32I, compute = CUBLAS_COMPUTE_32I), and
-// dequantizing the INT32 output back to BF16 via the fused dequant+bias kernel.
+/* Forward declarations of the per-GEMM scratch buffers — defined in the
+ * global device-state block below. dot_2d_gpu_int8 references them by
+ * name, and that function appears earlier in the file (next to dot_2d_gpu)
+ * for locality with the GEMM dispatch code. */
+extern qweight_t *X_int8_scratch_d;
+extern qscale_t  *scale_X_scratch_d;
+extern int32_t   *Y_int32_scratch_d;
+
+// INT8 weight-only GEMM dispatch (W8A8 via cuBLAS).
 //
-// Phase 1: stub only — aborts at runtime so the build is green but the INT8
-// path is gated until phases 3–5 land the supporting kernels.
+// Pipeline per call:
+//   1. Quantize X (BF16 [M,K]) per-token → X_int8 [M,K] + scale_X [M]
+//   2. cublasGemmEx in INT8: X_int8 @ W_int8^T → Y_int32 [M,N]
+//      (A=W_int8 transposed, B=X_int8, compute=INT32, algo=TENSOR_OP)
+//   3. Dequantize Y_int32 → Y_bf16 via scale_W ⊗ scale_X
+//
+// Bias is NOT applied here — caller still invokes add_bias_cuda. Phase 5
+// will fuse dequant + bias and remove that trailing call.
+//
+// Shape contract matches dot_2d_gpu: X is [x_r=M, x_c=K], W is stored
+// [w_r=N, w_c=K] (transposed at GEMM time), Y is [y_r=M, y_c=N].
 static void dot_2d_gpu_int8(
-    act_t *x_bf16, int x_r, int x_c, int ldx,
-    qweight_t *w_int8, int w_r, int w_c, int ldw, qscale_t *scale_w,
-    weight_t *bias_bf16,
-    act_t *y_bf16, int y_r, int y_c, int ldy)
+    act_t *x_bf16,        int x_r, int x_c, int ldx,
+    qweight_t *w_int8,    int w_r, int w_c, int ldw, qscale_t *scale_w,
+    act_t *y_bf16,        int y_r, int y_c, int ldy)
 {
-    (void)x_bf16; (void)x_r; (void)x_c; (void)ldx;
-    (void)w_int8; (void)w_r; (void)w_c; (void)ldw; (void)scale_w;
-    (void)bias_bf16;
-    (void)y_bf16; (void)y_r; (void)y_c; (void)ldy;
-    fprintf(stderr,
-        "FATAL: dot_2d_gpu_int8 not implemented yet (Phase 1 stub).\n"
-        "       Build was compiled with USE_INT8 but the runtime INT8 path\n"
-        "       (activation quant + cuBLAS INT8 GEMM + dequant) has not landed.\n");
-    abort();
+    cublasHandle_t handle = get_cublas_handle();
+
+    const int M = x_r;
+    const int K = x_c;
+    const int N = w_r;          /* W stored [out=w_r, in=w_c], so output dim N = w_r */
+
+    /* 1. Per-token quantize X. */
+    per_token_quant_cuda(x_bf16, X_int8_scratch_d, scale_X_scratch_d, M, K);
+
+    /* 2. cuBLAS INT8 GEMM. alpha/beta are int32 for CUBLAS_COMPUTE_32I.
+     * Row-major contract (same trick as dot_2d_gpu): cuBLAS column-major
+     * receives (op=T, W) as the leading operand and (op=N, X) as the
+     * trailing one, which yields the row-major X @ W^T into Y. */
+    const int alpha = 1;
+    const int beta  = 0;
+    cublasStatus_t stat = cublasGemmEx(
+        handle,
+        CUBLAS_OP_T,                /* W is [N, K]; transposed → [K, N] in col-major view */
+        CUBLAS_OP_N,                /* X is [M, K], no transpose */
+        N, M, K,
+        &alpha,
+        w_int8, CUDA_R_8I, ldw,
+        X_int8_scratch_d, CUDA_R_8I, ldx,
+        &beta,
+        Y_int32_scratch_d, CUDA_R_32I, ldy,
+        CUBLAS_COMPUTE_32I,
+        CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+
+    if (stat != CUBLAS_STATUS_SUCCESS) {
+        fprintf(stderr,
+            "FATAL: cublasGemmEx INT8 failed status=%d  M=%d N=%d K=%d  "
+            "ldw=%d ldx=%d ldy=%d  (x[%d x %d] w[%d x %d] y[%d x %d])\n",
+            stat, M, N, K, ldw, ldx, ldy, x_r, x_c, w_r, w_c, y_r, y_c);
+        abort();
+    }
+
+    /* 3. Dequant INT32 → BF16. */
+    dequant_int32_to_bf16_cuda(Y_int32_scratch_d, scale_w, scale_X_scratch_d,
+                               y_bf16, M, N);
 }
 #endif
 
@@ -672,6 +715,14 @@ qscale_t (*W_v_scale_d)[d_model];
 qscale_t (*attn_proj_scale_d)[d_model];
 qscale_t (*W1_scale_d)[d_ff];              // W1 output dim is d_ff
 qscale_t (*W2_scale_d)[d_model];
+
+/* Per-GEMM scratch buffers for the INT8 path. Sized for the largest GEMM
+ * shape used in any layer (ctx_len × d_ff, set by the W1 / W2 GEMMs).
+ * Reused across all GEMMs since dot_2d_gpu_int8 sequences quant → GEMM →
+ * dequant within itself (stream-ordered, no cross-call aliasing). */
+qweight_t *X_int8_scratch_d;     /* [ctx_len * d_ff] activation INT8 */
+qscale_t  *scale_X_scratch_d;    /* [ctx_len]        per-token amax / 127 */
+int32_t   *Y_int32_scratch_d;    /* [ctx_len * d_ff] raw GEMM accumulator */
 #endif
 
 act_t (*K_cache_d)[ctx_len][d_model]; // Pointer to layers of [ctx_len][d_model]
@@ -748,6 +799,24 @@ typedef struct{
     weight_t *ln2_gamma;
     weight_t *ln2_beta;
 
+#if defined(USE_INT8)
+    /* INT8 GEMM weights + per-output-channel FP32 scales. Parallel to the
+     * BF16 pointers above; the BF16 ones go unused under USE_INT8 (kept to
+     * avoid restructuring the struct conditionally). */
+    qweight_t *W_q_int8;
+    qweight_t *W_k_int8;
+    qweight_t *W_v_int8;
+    qweight_t *attn_proj_int8;
+    qweight_t *W1_int8;
+    qweight_t *W2_int8;
+    qscale_t  *W_q_scale;
+    qscale_t  *W_k_scale;
+    qscale_t  *W_v_scale;
+    qscale_t  *attn_proj_scale;
+    qscale_t  *W1_scale;
+    qscale_t  *W2_scale;
+#endif
+
 }TransformerBlockParams;
 
 #ifdef USE_CUDA
@@ -805,6 +874,11 @@ static void allocate_weights_gpu(void){
     CUDA_CHECK(cudaMalloc((void **)&attn_proj_scale_d,  num_layers * sizeof *attn_proj_scale_d));
     CUDA_CHECK(cudaMalloc((void **)&W1_scale_d,         num_layers * sizeof *W1_scale_d));
     CUDA_CHECK(cudaMalloc((void **)&W2_scale_d,         num_layers * sizeof *W2_scale_d));
+
+    /* Per-GEMM scratch — sized for the largest shape (ctx_len × d_ff). */
+    CUDA_CHECK(cudaMalloc((void **)&X_int8_scratch_d,  (size_t)ctx_len * d_ff * sizeof(qweight_t)));
+    CUDA_CHECK(cudaMalloc((void **)&scale_X_scratch_d, (size_t)ctx_len           * sizeof(qscale_t)));
+    CUDA_CHECK(cudaMalloc((void **)&Y_int32_scratch_d, (size_t)ctx_len * d_ff * sizeof(int32_t)));
 #endif
 
     CUDA_CHECK(cudaMalloc((void **)&tokens_d, ctx_len * sizeof(int)));
@@ -952,6 +1026,21 @@ static void update_layer_table(void){
         layer[l].ln1_beta = &layer_norm1_beta_d[l][0];
         layer[l].ln2_gamma = &layer_norm2_gamma_d[l][0];
         layer[l].ln2_beta = &layer_norm2_beta_d[l][0];
+
+#if defined(USE_INT8)
+        layer[l].W_q_int8       = &W_q_int8_d[l][0][0];
+        layer[l].W_k_int8       = &W_k_int8_d[l][0][0];
+        layer[l].W_v_int8       = &W_v_int8_d[l][0][0];
+        layer[l].attn_proj_int8 = &attn_proj_int8_d[l][0][0];
+        layer[l].W1_int8        = &W1_int8_d[l][0][0];
+        layer[l].W2_int8        = &W2_int8_d[l][0][0];
+        layer[l].W_q_scale       = &W_q_scale_d[l][0];
+        layer[l].W_k_scale       = &W_k_scale_d[l][0];
+        layer[l].W_v_scale       = &W_v_scale_d[l][0];
+        layer[l].attn_proj_scale = &attn_proj_scale_d[l][0];
+        layer[l].W1_scale        = &W1_scale_d[l][0];
+        layer[l].W2_scale        = &W2_scale_d[l][0];
+#endif
     }
 #endif
 }
@@ -1023,16 +1112,28 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
     // QKV
             
     
+#if defined(USE_INT8)
+    dot_2d_gpu_int8(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_q_int8,d_model,d_model,d_model,tbp->W_q_scale,&Q_d[cache_start_index][0],n_new_tokens,d_model,d_model);
+#else
     dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_q,d_model,d_model,d_model,&Q_d[cache_start_index][0],n_new_tokens, d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+#endif
     add_bias_cuda(&Q_d[cache_start_index][0],n_new_tokens,d_model,tbp->b_q,NULL);
     // final destination pointer in the cache
-    
+
     act_t* k_cache_ptr = &K_cache_d[layer_id][cache_start_index][0];
+#if defined(USE_INT8)
+    dot_2d_gpu_int8(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_k_int8,d_model,d_model,d_model,tbp->W_k_scale,k_cache_ptr,n_new_tokens,d_model,d_model);
+#else
     dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_k,d_model,d_model,d_model,k_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+#endif
     add_bias_cuda(k_cache_ptr,n_new_tokens,d_model,tbp->b_k,NULL);
 
     act_t* v_cache_ptr = &V_cache_d[layer_id][cache_start_index][0];
+#if defined(USE_INT8)
+    dot_2d_gpu_int8(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_v_int8,d_model,d_model,d_model,tbp->W_v_scale,v_cache_ptr,n_new_tokens,d_model,d_model);
+#else
     dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_v,d_model,d_model,d_model,v_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+#endif
     add_bias_cuda(v_cache_ptr,n_new_tokens,d_model,tbp->b_v,NULL);
     
     last_index = n_tokens;
@@ -1101,7 +1202,11 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
             //memcpy(&final_attention_output[i][h * head_dim], &context_heads[h][i][0], head_dim * sizeof(float));
         //}
         // 2. Attention projection (on the last token only)
+#if defined(USE_INT8)
+        dot_2d_gpu_int8(&final_attention_output_d[i][0],1,d_model,d_model,tbp->attn_proj_int8,d_model,d_model,d_model,tbp->attn_proj_scale,&context_d[i][0],1,d_model,d_model);
+#else
         dot_2d(&final_attention_output_d[i][0],1,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context_d[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+#endif
 
         // Attn projection bias
         add_bias_cuda(&context_d[i][0],1,d_model,tbp->attn_proj_bias,NULL);
@@ -1115,13 +1220,21 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
 
 
         // 5. MLP (on the last token only)
+#if defined(USE_INT8)
+        dot_2d_gpu_int8(&X_norm2_d[i][0],1,d_model,d_model,tbp->W1_int8,d_ff,d_model,d_model,tbp->W1_scale,&X1_out_d[i][0],1,d_ff,d_ff);
+#else
         dot_2d(&X_norm2_d[i][0],1,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out_d[i][0],1,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
+#endif
         // W1 bias
         add_bias_cuda(&X1_out_d[i][0],1,d_ff,tbp->b1,NULL);
         // GELU activation
         gelu_cuda(&X1_out_d[i][0],d_ff,1,NULL);
         // W2
+#if defined(USE_INT8)
+        dot_2d_gpu_int8(&X1_out_d[i][0],1,d_ff,d_ff,tbp->W2_int8,d_model,d_ff,d_ff,tbp->W2_scale,&X2_out_d[i][0],1,d_model,d_model);
+#else
         dot_2d(&X1_out_d[i][0],1,d_ff,d_ff,tbp->W2,d_model,d_ff,d_ff,&X2_out_d[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+#endif
         // W2 bias
         add_bias_cuda(&X2_out_d[i][0],1,d_model,tbp->b2,NULL);
 
@@ -1145,7 +1258,11 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
         }
 
         // 2. Attention projection: [n_tokens x d_model] @ W_proj^T -> context
+#if defined(USE_INT8)
+        dot_2d_gpu_int8(&final_attention_output_d[0][0],n_tokens,d_model,d_model,tbp->attn_proj_int8,d_model,d_model,d_model,tbp->attn_proj_scale,&context_d[0][0],n_tokens,d_model,d_model);
+#else
         dot_2d(&final_attention_output_d[0][0],n_tokens,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context_d[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+#endif
         // Attn projection bias
         add_bias_cuda(&context_d[0][0],n_tokens,d_model,tbp->attn_proj_bias,NULL);
 
@@ -1156,13 +1273,21 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
         layernorm_cuda((act_t (*)[d_model])&residual_out_d[0][0],n_tokens,d_model,tbp->ln2_gamma,tbp->ln2_beta,(act_t (*)[d_model])&X_norm2_d[0][0],eps);
 
         // 5. MLP
+#if defined(USE_INT8)
+        dot_2d_gpu_int8(&X_norm2_d[0][0],n_tokens,d_model,d_model,tbp->W1_int8,d_ff,d_model,d_model,tbp->W1_scale,&X1_out_d[0][0],n_tokens,d_ff,d_ff);
+#else
         dot_2d(&X_norm2_d[0][0],n_tokens,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out_d[0][0],n_tokens,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
+#endif
         // W1 bias
         add_bias_cuda(&X1_out_d[0][0],n_tokens,d_ff,tbp->b1,NULL);
         // GELU activation
         gelu_cuda(&X1_out_d[0][0],d_ff,n_tokens,NULL);
         // W2
+#if defined(USE_INT8)
+        dot_2d_gpu_int8(&X1_out_d[0][0],n_tokens,d_ff,d_ff,tbp->W2_int8,d_model,d_ff,d_ff,tbp->W2_scale,&X2_out_d[0][0],n_tokens,d_model,d_model);
+#else
         dot_2d(&X1_out_d[0][0],n_tokens,d_ff,d_ff,tbp->W2,d_model,d_ff,d_ff,&X2_out_d[0][0],n_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
+#endif
         // W2 bias
         add_bias_cuda(&X2_out_d[0][0],n_tokens,d_model,tbp->b2,NULL);
 

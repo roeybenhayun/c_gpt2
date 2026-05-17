@@ -109,4 +109,43 @@ extern "C" void per_token_quant_cuda(
     }
 }
 
+/* Dequantize the INT32 GEMM accumulator back to BF16 activations.
+ *   Y_bf16[i,j] = scale_W[j] * scale_X[i] * Y_int32[i,j]
+ * Bias is NOT folded in here — caller still invokes add_bias_cuda after.
+ * Phase 5 will replace this with a fused dequant+bias kernel and remove
+ * the trailing add_bias call. */
+__global__ void dequant_int32_to_bf16_kernel(
+    const int32_t  *Y_int32,    /* [M, N] row-major */
+    const qscale_t *scale_W,    /* [N] per-output-channel */
+    const qscale_t *scale_X,    /* [M] per-token */
+    act_t          *Y_bf16,     /* [M, N] row-major */
+    int M, int N)
+{
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    if (row >= M || col >= N) return;
+
+    size_t idx = (size_t)row * N + col;
+    float val = (float)Y_int32[idx] * scale_W[col] * scale_X[row];
+    Y_bf16[idx] = to_act(val);
+}
+
+extern "C" void dequant_int32_to_bf16_cuda(
+    const int32_t *Y_int32, const qscale_t *scale_W, const qscale_t *scale_X,
+    act_t *Y_bf16, int M, int N)
+{
+    if (M <= 0 || N <= 0) return;
+
+    dim3 threads(16, 16, 1);
+    dim3 blocks((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16), 1);
+    dequant_int32_to_bf16_kernel<<<blocks, threads>>>(Y_int32, scale_W, scale_X, Y_bf16, M, N);
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "FATAL dequant_int32_to_bf16_cuda launch: %s (M=%d N=%d)\n",
+                cudaGetErrorString(err), M, N);
+        abort();
+    }
+}
+
 #endif /* USE_INT8 */

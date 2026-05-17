@@ -67,6 +67,16 @@ void per_token_quant_cuda(const act_t *X,
                           qscale_t  *scale_X,
                           int tokens,
                           int d);
+
+/* Dequantize the INT32 GEMM accumulator to BF16:
+ *   Y_bf16[i,j] = scale_W[j] * scale_X[i] * Y_int32[i,j]
+ * Caller still applies bias via add_bias_cuda afterwards. Phase 5 will
+ * replace this with a fused dequant+bias kernel. */
+void dequant_int32_to_bf16_cuda(const int32_t  *Y_int32,
+                                const qscale_t *scale_W,
+                                const qscale_t *scale_X,
+                                act_t          *Y_bf16,
+                                int M, int N);
 #endif
 
 
