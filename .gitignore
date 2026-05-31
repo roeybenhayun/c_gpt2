@@ -40,6 +40,7 @@ transformers_env/
 transformer_env/
 .venv/
 .vscode/
+.claude/
 
 
 # ───────── Large binaries ─────────
