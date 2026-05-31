@@ -1,0 +1,14 @@
+{
+  "source": "Table 14, page 20 (CNN/Daily Mail summarization)",
+  "category": "summarization",
+  "title": "Chauvet-Pont-d'Arc replica cave",
+  "context_note": "Prompt rebuilt from the full source article. Source: cnn_dailymail HF dataset (the exact CNN/DM dataset the paper used for summarization, paper §3.6). Full article + ' TL;DR:' trigger. Prompt is 1682 tokens.",
+  "reference_summary_note": "Reference (gold): Cave mimics famous Caverne du Pont-d'Arc in France, the oldest cave decorated by man and the best preserved. The replica contains all 1,000 paintings which include 425 such as a woolly rhinoceros and mammoths. Minute details were copied using 3D modelling and anamorphic techniques, often used to shoot widescreen images. The modern cave also includes replica paw prints of bears, bones and details preserved in the original cave.",
+  "prompt_file": "prompt.txt",
+  "expected_file": "expected.txt",
+  "params": {
+    "top_k": 2,
+    "temperature": 1.0,
+    "out_tokens": 100
+  }
+}

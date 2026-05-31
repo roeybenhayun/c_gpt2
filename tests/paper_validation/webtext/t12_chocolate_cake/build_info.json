@@ -1,0 +1,12 @@
+{
+  "anchor_used": "you don't have 7-inch cake pans, you can get 3 shorter 8-inch layers out of this",
+  "anchor_byte_offset": 1780,
+  "anchor_byte_end": 1860,
+  "prefix_chars": 1860,
+  "prefix_tokens": 427,
+  "kept_tokens": 384,
+  "decoded_chars": 1677,
+  "re_encoded_tokens": 384,
+  "truncation_note": "sliced last 384 of 427 prefix tokens",
+  "build_summary": "Source: cakemerchant.com (web fetch). Anchored on last 80 chars of paper's visible chunk; sliced last 384 of 427 prefix tokens. Final token count: 384."
+}

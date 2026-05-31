@@ -232,6 +232,53 @@ Prints a kernel-family-bucketed table with `baseline | target | ratio | Δ time`
 
 ---
 
+## Paper Validation Tests
+
+`scripts/run_paper_tests.sh` runs a curated set of prompts taken from the GPT-2 paper (*Language Models are Unsupervised Multitask Learners*, Radford et al. 2019). Every case has a **validated full-context prompt**: either the paper printed the full prompt itself (translation, CoQA), or the source article was recovered from a public dataset / web fetch and rebuilt to the exact token count via the GPT-2 tokenizer. Per-case prompts, expected reference outputs and sampling parameters live under `tests/paper_validation/`; see `tests/paper_validation/README.md` for the per-case provenance.
+
+Each invocation runs every selected case in its own `gpt2` process (clean reset between cases) and captures stdout to `<case>/generated_<target>_<size>.txt` for qualitative comparison against `<case>/expected.txt`.
+
+### Prerequisite
+
+The tokenizer server (`uv run python tokenizer.py`) must be listening on `127.0.0.1:65432` — same as for inference. The script pre-flights this and fails fast if it's down.
+
+### Runner flags
+
+```bash
+./scripts/run_paper_tests.sh                                # Default: --gpu large, all 8 active cases
+./scripts/run_paper_tests.sh --bf16 small                   # BF16 build, small only
+./scripts/run_paper_tests.sh --int8 small                   # INT8 build, small only
+./scripts/run_paper_tests.sh --gpu small medium             # Two sizes back-to-back
+./scripts/run_paper_tests.sh --gpu --category translation   # One category
+./scripts/run_paper_tests.sh --gpu --case t14a              # One specific case
+./scripts/run_paper_tests.sh --gpu --build small            # Force a rebuild before running
+./scripts/run_paper_tests.sh --help                         # Full flag list
+```
+
+| Flag                        | Purpose                                                                                                |
+|-----------------------------|--------------------------------------------------------------------------------------------------------|
+| `--cpu` / `--gpu` / `--bf16` / `--int8` | Pick a precision/runtime (one per invocation, default `--gpu`).                                  |
+| `small` / `medium` / `large`| Pick model sizes (default `small`; pass multiple to run several back-to-back).                         |
+| `--category <name>`         | Restrict to one of `webtext`, `summarization`, `translation`, `qa_coqa`.                                |
+| `--case <substr>`           | Substring-match on the case directory name (e.g. `t14a`, `chocolate`, `kerry`).                         |
+| `--build`                   | Force a build before running (default: only build if the binary is missing).                            |
+| `--skip-tokenizer-check`    | Skip the localhost:65432 pre-flight check.                                                              |
+
+To compare precisions on the same cases, re-run with different target flags — captured outputs land in separate files per target (`generated_gpu_small.txt` vs `generated_bf16_small.txt` vs `generated_int8_small.txt`), so they don't overwrite each other and can be diffed directly.
+
+### CLI arguments wired up for this
+
+The harness drives `gpt2` via these per-case CLI flags (all also usable directly):
+
+| Flag                  | What it sets                                                                              |
+|-----------------------|-------------------------------------------------------------------------------------------|
+| `--prompt <text>`     | Prompt string (UTF-8, multi-line, embedded quotes — JSON-escaped on the way to the tokenizer). |
+| `--temperature <f>`   | Sampling temperature; `0` selects greedy decoding.                                        |
+| `--top_k <n>`         | Top-k truncation (paper defaults: 40 for WebText, 2 for summarization, 1 for greedy).     |
+| `--req_out_tokens <n>`| Number of tokens to generate.                                                             |
+
+---
+
 ## Directory Structure
 
 ```
@@ -247,14 +294,18 @@ Prints a kernel-family-bucketed table with `baseline | target | ratio | Δ time`
 ├── include/                        # Headers (cuda_kernels.h, model_config.h)
 ├── scripts/
 │   ├── run.sh                      # End-to-end build + run + log
+│   ├── run_paper_tests.sh          # Paper-validation suite runner (see Paper Validation Tests)
 │   ├── prefill_benchmark.sh        # TTFT benchmark at varying prompt lengths
 │   ├── performance_analysis.py     # Plots + summary tables from JSON logs
 │   ├── compare_profiles.py         # nsys-rep diff (per-kernel time)
 │   └── prompts/                    # Reusable prompt fixtures (long_prompt.txt)
+├── tests/
+│   └── paper_validation/           # GPT-2 paper test cases (webtext, summarization, translation, qa_coqa)
 ├── weights/                        # Model weights
 ├── logs/                           # JSON logs and nsys profile reports
 ├── docs/
-│   └── articles/                   # Long-form articles, one folder per article with its own assets/
+│   ├── articles/                   # Long-form articles, one folder per article with its own assets/
+│   └── papers/                     # Reference papers (GPT-2 paper PDF)
 ├── out/
 │   ├── cpu/                        # CPU binaries
 │   └── gpu/                        # GPU FP32 binaries + CUDA object files

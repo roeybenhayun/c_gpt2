@@ -1,0 +1,4 @@
+# Per-run artifacts from run_paper_tests.sh — regenerated each run.
+generated_*.txt
+run_*_*.json
+run_*_*.log

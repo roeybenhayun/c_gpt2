@@ -1,0 +1,20 @@
+{
+  "source": "Table 12, page 19",
+  "category": "webtext",
+  "title": "Mint chocolate cake (6 non-cherry-picked completions, same context)",
+  "context_note": "Prompt rebuilt from the full source article. Source: cakemerchant.com (web fetch). Anchored on last 80 chars of paper's visible chunk; sliced last 384 of 427 prefix tokens. Final token count: 384.",
+  "prompt_file": "prompt.txt",
+  "expected_file": "expected_1.txt",
+  "alt_expected_files": [
+    "expected_2.txt",
+    "expected_3.txt",
+    "expected_4.txt",
+    "expected_5.txt",
+    "expected_6.txt"
+  ],
+  "params": {
+    "top_k": 40,
+    "temperature": 1.0,
+    "out_tokens": 128
+  }
+}

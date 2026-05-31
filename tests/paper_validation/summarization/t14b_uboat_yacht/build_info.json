@@ -1,0 +1,6 @@
+{
+  "article_chars": 7697,
+  "prompt_chars": 7704,
+  "prompt_tokens": 1695,
+  "build_summary": "Source: cnn_dailymail HF dataset (the exact CNN/DM dataset the paper used for summarization, paper §3.6). Full article + ' TL;DR:' trigger. Prompt is 1695 tokens."
+}

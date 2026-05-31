@@ -1,0 +1,14 @@
+{
+    "source": "Table 15, page 21 (WMT-14 English-French translation)",
+    "category": "translation",
+    "direction": "en_to_fr",
+    "title": "The Next Day Extra re-release",
+    "context_note": "Paper section 3.7 describes few-shot 'english sentence = french sentence' conditioning + greedy decoding. The paper does NOT publish the specific example pairs used; we use a fixed 3-pair header (hello/cat/books) so the test is reproducible. Expected output is GPT-2 large's translation as published in the paper.",
+    "prompt_file": "prompt.txt",
+    "expected_file": "expected.txt",
+    "params": {
+        "top_k": 1,
+        "temperature": 0.0,
+        "out_tokens": 80
+    }
+}
