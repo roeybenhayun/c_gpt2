@@ -1,12 +1,10 @@
 /// TODO
 // * Change to loop to output token by token (instead of all at once)
 // * Move the token selection logic into a separate function
-// * CLI arg for temperature
-// * CLI arg for top_k
 // * CLI atg for top_p
 // * Function to cleanup data structures
 // * Update layer names consistently
-// * Save ~147MB by using remove wte_T and use in dot_2d with transposed flag 
+// * Save ~147MB by using remove wte_T and use in dot_2d with transposed flag
 
 #include <math.h>
 #include <stdio.h>
@@ -1923,6 +1921,7 @@ int main(int argc, char *argv[])
 #endif
 
     float temperature = 1.0;
+    int top_k_val = 40;  // matches GPT-2 paper Tables 7-13 sampling (k=40)
     int requested_out_tokens = 768; // 16, 32, 64, 128, 256, 512, 1024 (measure performance I used 768)
     int token_chunk_size = 32; // set to 1 for latency measurement
     struct timespec loop_start, loop_end; // For per-chunk/per-token timing
@@ -1935,6 +1934,12 @@ int main(int argc, char *argv[])
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--prompt") == 0 && i + 1 < argc) {
             cli_input = argv[i + 1];
+            i++;
+        }else if (strcmp(argv[i], "--temperature") == 0 && i + 1 < argc) {
+            temperature = (float)atof(argv[i + 1]);
+            i++;
+        }else if (strcmp(argv[i], "--top_k") == 0 && i + 1 < argc) {
+            top_k_val = atoi(argv[i + 1]);
             i++;
         }else if (strcmp(argv[i], "--req_out_tokens")==0 && i + 1 < argc){
             requested_out_tokens = atoi(argv[i+1]); // fine to use atoi for now.
@@ -1951,10 +1956,23 @@ int main(int argc, char *argv[])
             verbose = 1;
         }
     }
+
+    /* top_k <= 0 is meaningless for the cumulative-prob loop below (it would
+     * leave sampled_token = -1). Greedy decoding is reached via --temperature 0,
+     * not --top_k 0. Clamp to 1 with a warning so a typo doesn't silently abort. */
+    if (top_k_val < 1) {
+        fprintf(stderr, "WARN: --top_k %d invalid; clamping to 1 (use --temperature 0 for greedy)\n",
+                top_k_val);
+        top_k_val = 1;
+    }
+    if (top_k_val > vocab_size) top_k_val = vocab_size;
+
     if (verbose) {
         printf("req_out_tokens = %d\n",requested_out_tokens);
         printf("token_chunk_size = %d\n",token_chunk_size);
         printf("json_out_file = %s\n",json_out_file);
+        printf("temperature = %.3f\n", temperature);
+        printf("top_k = %d\n", top_k_val);
     }
 
     while(1){ 
@@ -2017,9 +2035,34 @@ int main(int argc, char *argv[])
         // should be reset for each new prompt
         last_index = 0;
 
-        // Format
-        snprintf(encode_request, sizeof(encode_request),
-         "{\"mode\": \"encode\", \"text\": \"%s\"}", input_buffer);
+        /* Build the encode request via jansson so any byte in input_buffer
+         * (quotes, backslashes, newlines, UTF-8) is properly JSON-escaped.
+         * The previous snprintf path produced malformed JSON for any prompt
+         * containing " or newline (paper tables 15-17). */
+        {
+            json_t *encode_obj = json_pack("{s:s, s:s}",
+                                           "mode", "encode",
+                                           "text", input_buffer);
+            if (!encode_obj) {
+                fprintf(stderr, "FATAL: json_pack failed for encode request\n");
+                exit(1);
+            }
+            char *encode_str = json_dumps(encode_obj, JSON_COMPACT);
+            json_decref(encode_obj);
+            if (!encode_str) {
+                fprintf(stderr, "FATAL: json_dumps failed for encode request\n");
+                exit(1);
+            }
+            if (strlen(encode_str) >= sizeof(encode_request)) {
+                fprintf(stderr,
+                    "FATAL: encoded prompt JSON (%zu bytes) exceeds encode_request buffer (%zu)\n",
+                    strlen(encode_str), sizeof(encode_request));
+                free(encode_str);
+                exit(1);
+            }
+            strcpy(encode_request, encode_str);
+            free(encode_str);
+        }
          // Get tokens
         send_json_to_tokenizer(encode_request, encode_response, sizeof(encode_response));
         //printf("Encode Response: %s\n", encode_response);
@@ -2178,8 +2221,7 @@ int main(int argc, char *argv[])
                     }
                 }
             } else {
-                // --- Apply Top-K Sampling ---
-                int top_k_val = 40;
+                // --- Apply Top-K Sampling --- (top_k_val from CLI, default 40)
                 int selected_indices[vocab_size];
                 act_t selected_probs[vocab_size];
 
@@ -2266,8 +2308,11 @@ int main(int argc, char *argv[])
 
         }
     
-        for (int i = 0; i < current_seq_len; i++) {
-            //printf("*******TOKEN = %d *****\n",tokens[i]);
+        /* Decode only the generated tokens [initial .. current). The prompt
+         * tokens are already stored verbatim in perf_root.prompt; including
+         * them here would duplicate the input in generated_text and bloat the
+         * tokenizer request for long prompts. */
+        for (int i = current_seq_len_initial; i < current_seq_len; i++) {
             snprintf(temp_token_str, sizeof(temp_token_str), "%d%s", tokens[i], (i < current_seq_len - 1) ? "," : "");
             strcat(token_list, temp_token_str);
         }
@@ -2315,9 +2360,20 @@ int main(int argc, char *argv[])
     /* Token chunk size */
     json_object_set_new(perf_root, "token_chunk_size", json_integer(token_chunk_size)); 
 
-    /* full decode text */
-    json_object_set_new(perf_root, "generated_text",
-                    json_string(decode_response));  // decode_response already null-terminated
+    /* Generated text — parse the tokenizer reply once and store just the
+     * .text field, not the raw {"text":"..."} wrapper. */
+    {
+        const char *plain = "";
+        json_t *decode_root = json_loads(decode_response, 0, NULL);
+        if (decode_root) {
+            json_t *text_field = json_object_get(decode_root, "text");
+            if (text_field && json_is_string(text_field)) {
+                plain = json_string_value(text_field);
+            }
+        }
+        json_object_set_new(perf_root, "generated_text", json_string(plain));
+        if (decode_root) json_decref(decode_root);
+    }
 
     
     json_object_set_new(perf_root, "total_seconds", json_real(total_inference_elapsed));
