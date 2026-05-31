@@ -164,6 +164,7 @@ The runner builds the requested binaries, then runs each model with a fixed work
 ./scripts/run.sh --cpu                  # CPU FP32 only
 ./scripts/run.sh --gpu                  # GPU FP32 only
 ./scripts/run.sh --bf16                 # GPU BF16 only
+./scripts/run.sh --int8                 # GPU INT8 weights + BF16 activations (opt-in)
 ./scripts/run.sh --gpu --bf16 large     # GPU FP32 and BF16, Large only
 ./scripts/run.sh --gpu --profile small  # GPU FP32 with nsys profiling
 ```
@@ -310,7 +311,8 @@ The harness drives `gpt2` via these per-case CLI flags (all also usable directly
 │   ├── cpu/                        # CPU binaries
 │   └── gpu/                        # GPU FP32 binaries + CUDA object files
 │       ├── bf16/                   # GPU BF16 binaries (built with `make gpu bf16 …`)
-│       └── fp16/                   # GPU FP16 binaries (built with `make gpu fp16 …`)
+│       ├── fp16/                   # GPU FP16 binaries (built with `make gpu fp16 …`)
+│       └── int8/                   # GPU INT8 binaries (built with `make gpu int8 …`)
 └── transformers/
     └── models/                     # HuggingFace model files (optional)
 ```

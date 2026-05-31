@@ -157,18 +157,11 @@ done
 trap 'kill $TOKENIZER_PID 2>/dev/null || true' EXIT
 
 # ── 6. Run the profiled benchmark ────────────────────────────────────────────
-#
-# FP16 is included alongside FP32 + BF16 because cloud cost is dominated by
-# the fixed setup steps above (~5 GB weight download, build, tokenizer warm-
-# up). Adding FP16 only extends each preset run by ~30% wall-clock — well
-# under the cost of a separate cloud launch later if the FP16 question turns
-# out to be interesting. On local hardware `run.sh` keeps FP16 opt-in to
-# avoid slowing down quick iterations.
 
-log "Running benchmarks: --gpu --bf16 --fp16 --profile across all 3 presets"
-./scripts/run.sh --gpu --bf16 --fp16 --profile --decode
-./scripts/run.sh --gpu --bf16 --fp16 --profile --prefill
-./scripts/run.sh --gpu --bf16 --fp16 --profile --balanced
+log "Running benchmarks: --gpu --bf16 --profile across all 3 presets"
+./scripts/run.sh --gpu --bf16 --profile --decode
+./scripts/run.sh --gpu --bf16 --profile --prefill
+./scripts/run.sh --gpu --bf16 --profile --balanced
 
 # ── 7. Output summary + handoff to manual rsync ──────────────────────────────
 

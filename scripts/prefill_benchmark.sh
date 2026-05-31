@@ -21,6 +21,24 @@ SOURCE_TEXT="docs/articles/2026-04-gpu-inference/article.md"
 PROFILE=false
 PROFILE_TARGET="${PREFILL_PROFILE_TARGET:-512}"
 
+usage() {
+    cat <<'EOF' >&2
+Usage: prefill_benchmark.sh [options...] [size] [source-text]
+
+ -h, --help                  This help text
+     --profile               Also nsys-profile a single target prompt length
+     --profile-target <N>    Token target for --profile (default 512;
+                             env PREFILL_PROFILE_TARGET overrides default)
+
+  size:        small | medium | large (default: large)
+  source-text: path to a text file for prompt construction
+               (default docs/articles/2026-04-gpu-inference/article.md)
+
+  Method: feed prompts of increasing length, request 1 output token,
+  read ttft_s from the JSON log (pure prefill time).
+EOF
+}
+
 POSITIONAL=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -37,11 +55,12 @@ while [ "$#" -gt 0 ]; do
             shift 2
             ;;
         --help|-h)
-            sed -n '1,18p' "$0"
+            usage
             exit 0
             ;;
         --*)
             echo "Unknown option: $1" >&2
+            usage
             exit 1
             ;;
         *)

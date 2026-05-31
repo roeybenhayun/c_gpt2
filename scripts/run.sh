@@ -17,7 +17,7 @@ fi
 RUN_CPU=false
 RUN_GPU=false
 RUN_BF16=false
-RUN_FP16=false
+RUN_INT8=false
 PROFILE=false
 MODELS=()
 PROMPT_FILE=""
@@ -26,19 +26,23 @@ OUT_TOKENS_EXPLICIT=false       # tracks whether --out-tokens was passed by the 
 
 usage() {
     cat <<'EOF' >&2
-Usage: ./run.sh [runners] [preset] [overrides] [size...]
-  runners:   --cpu | --gpu | --bf16    (default if none given: all three)
-             --fp16                    (opt-in only — NOT included in the default set;
-                                        same hardware path as --bf16 but FP16 storage,
-                                        so use it to compare numerical behaviour vs BF16)
-  preset:    --decode | --prefill | --balanced  (mutually exclusive; default: --decode)
-               --decode    short prompt + 768 output tokens (M ≈ 1, decode-bound)
-               --prefill   long prompt (~512 tok) + 32 output tokens (large M, prefill-dominated)
-               --balanced  medium prompt (~200 tok) + 200 output tokens (mixed)
-  overrides: --prompt-file <path>   replaces the preset's prompt (escape hatch)
-             --out-tokens <N>       replaces the preset's output count
-  options:   --profile               run under nsys (GPU runs only)
-  sizes:     small | medium | large  (default: all three)
+Usage: run.sh [options...] [size...]
+
+     --balanced            Use the balanced preset (~200 prompt + ~200 output tokens)
+     --bf16                Run GPU BF16 build (in default set)
+     --cpu                 Run CPU FP32 build (in default set)
+     --decode              Use the decode preset (default): ~13 prompt + 768 output tokens
+     --gpu                 Run GPU FP32 build (in default set)
+ -h, --help                This help text
+     --int8                Run GPU INT8 build (opt-in; needs sm_75+ and quant8.bin)
+     --out-tokens <N>      Override the preset's output token count
+     --prefill             Use the prefill preset: ~1000 prompt + 32 output tokens
+     --profile             Run under nsys (GPU runs only)
+     --prompt-file <path>  Override the preset's prompt
+
+  size: small | medium | large (default: all three).
+  Presets --decode / --prefill / --balanced are mutually exclusive.
+  Runners default to --cpu --gpu --bf16 if none specified.
 EOF
 }
 
@@ -55,7 +59,7 @@ while [ "$#" -gt 0 ]; do
         --cpu)        RUN_CPU=true; shift ;;
         --gpu)        RUN_GPU=true; shift ;;
         --bf16)       RUN_BF16=true; shift ;;
-        --fp16)       RUN_FP16=true; shift ;;
+        --int8)       RUN_INT8=true; shift ;;
         --profile)    PROFILE=true; shift ;;
         --decode)     set_preset decode; shift ;;
         --prefill)    set_preset prefill; shift ;;
@@ -137,9 +141,9 @@ echo "Prompt:      ${#INPUT_TEXT} bytes  (source: ${PROMPT_FILE:-built-in defaul
 echo "Out tokens:  $OUT_TOKENS"
 
 # Default: run cpu + gpu fp32 + gpu bf16 if no runner flag specified.
-# FP16 is opt-in only — it's a numerical-behaviour comparison vs BF16, not part
-# of the article's main story, so it's deliberately NOT in the default set.
-if ! $RUN_CPU && ! $RUN_GPU && ! $RUN_BF16 && ! $RUN_FP16; then
+# INT8 is opt-in only — it's a separate (W8A8) precision path with its own
+# quant8.bin weights, so it's not in the default set.
+if ! $RUN_CPU && ! $RUN_GPU && ! $RUN_BF16 && ! $RUN_INT8; then
     RUN_CPU=true
     RUN_GPU=true
     RUN_BF16=true
@@ -236,23 +240,23 @@ if $RUN_BF16; then
     run_models out/gpu/bf16 bf16 yes
 fi
 
-# ───────── GPU FP16 build & run ─────────
-if $RUN_FP16; then
+# ───────── GPU INT8 build & run ─────────
+if $RUN_INT8; then
     echo "========================================="
-    echo "  Building GPU (fp16) binaries"
+    echo "  Building GPU (int8) binaries"
     echo "========================================="
-    make gpu fp16 "${MODELS[@]}"
+    make gpu int8 "${MODELS[@]}"
     if [ $? -ne 0 ]; then
-        echo "GPU fp16 build failed!"
+        echo "GPU int8 build failed!"
         exit 1
     fi
 
     echo "========================================="
-    echo "  Running GPU (fp16) inference"
+    echo "  Running GPU (int8) inference"
     echo "========================================="
-    run_models out/gpu/fp16 fp16 yes
+    run_models out/gpu/int8 int8 yes
 fi
 
 echo "========================================="
-echo "  Runs completed. (CPU=$RUN_CPU GPU=$RUN_GPU BF16=$RUN_BF16 FP16=$RUN_FP16)"
+echo "  Runs completed. (CPU=$RUN_CPU GPU=$RUN_GPU BF16=$RUN_BF16 INT8=$RUN_INT8)"
 echo "========================================="
