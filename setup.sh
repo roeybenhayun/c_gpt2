@@ -18,9 +18,24 @@ declare -A WEIGHT_FILES=(
 
 # Approximate download sizes
 declare -A WEIGHT_SIZES=(
-    ["small"]="~500 MB"
-    ["medium"]="~1.4 GB"
-    ["large"]="~3.0 GB"
+    ["small"]="~622 MB"
+    ["medium"]="~1.6 GB"
+    ["large"]="~3.2 GB"
+)
+
+# INT8 weight artifacts. Each size needs BOTH the .bin (quantized weights)
+# and the .json sidecar (per-channel scales + tensor layout metadata).
+# Only needed for the GPU INT8 build (`make gpu int8 <size>`).
+declare -A INT8_WEIGHT_FILES=(
+    ["small"]="gpt2_small_quant8.bin"
+    ["medium"]="gpt2_medium_quant8.bin"
+    ["large"]="gpt2_large_quant8.bin"
+)
+
+declare -A INT8_WEIGHT_SIZES=(
+    ["small"]="~233 MB"
+    ["medium"]="~491 MB"
+    ["large"]="~930 MB"
 )
 
 # ─────────────────────────────────────────────────
@@ -213,6 +228,81 @@ download_weights() {
 }
 
 # ─────────────────────────────────────────────────
+# Step 4b: Download INT8 quantized weights (GPU only, opt-in)
+# ─────────────────────────────────────────────────
+
+download_int8_weights() {
+    # INT8 path needs a CUDA GPU with compute capability >= 7.5 (Turing).
+    # No point offering the download on non-GPU machines.
+    if ! $HAS_GPU; then
+        return
+    fi
+
+    info "Step 4b: INT8 quantized weights (optional, for the GPU INT8 build)"
+
+    mkdir -p "$WEIGHTS_DIR"
+
+    local missing=()
+    for size in small medium large; do
+        local bin="${INT8_WEIGHT_FILES[$size]}"
+        local meta="${bin%.bin}.json"
+        if [ -f "$WEIGHTS_DIR/$bin" ] && [ -f "$WEIGHTS_DIR/$meta" ]; then
+            skip "$size INT8 weights"
+        else
+            missing+=("$size")
+        fi
+    done
+
+    if [ ${#missing[@]} -eq 0 ]; then
+        return
+    fi
+
+    echo ""
+    echo "  INT8 weights available for download (W8A8, requires GPU >= sm_75):"
+    for size in "${missing[@]}"; do
+        echo "    [$size] ${INT8_WEIGHT_SIZES[$size]}"
+    done
+
+    echo ""
+    # Default is 'none' — INT8 is opt-in; the FP32/BF16 path is the main one.
+    read -rp "  Which INT8 models to download? (${missing[*]}/all/none) [none]: " choice
+    choice=${choice:-none}
+
+    if [ "$choice" = "none" ]; then
+        echo "  Skipping INT8 weight downloads."
+        return
+    fi
+
+    if [ "$choice" = "all" ]; then
+        local sizes=("${missing[@]}")
+    else
+        IFS=',' read -ra sizes <<< "$choice"
+    fi
+
+    for size in "${sizes[@]}"; do
+        size=$(echo "$size" | xargs)
+        local bin="${INT8_WEIGHT_FILES[$size]:-}"
+        if [ -z "$bin" ]; then
+            err "Unknown INT8 model size: $size"
+            continue
+        fi
+        local meta="${bin%.bin}.json"
+
+        # Both files are required — the loader needs the .json for per-channel
+        # scales and the tensor layout. Download both if either is missing.
+        if [ -f "$WEIGHTS_DIR/$bin" ] && [ -f "$WEIGHTS_DIR/$meta" ]; then
+            skip "$size INT8 weights"
+            continue
+        fi
+
+        echo "  Downloading $size INT8 weights (${INT8_WEIGHT_SIZES[$size]})..."
+        curl -L -o "$WEIGHTS_DIR/$bin"  "$WEIGHTS_BASE_URL/$bin"
+        curl -L -o "$WEIGHTS_DIR/$meta" "$WEIGHTS_BASE_URL/$meta"
+        ok "$size INT8 weights downloaded (.bin + .json)"
+    done
+}
+
+# ─────────────────────────────────────────────────
 # Step 5: Python environment
 # ─────────────────────────────────────────────────
 
@@ -255,6 +345,11 @@ print_summary() {
         echo "       make gpu small     # GPT-2 Small (124M)"
         echo "       make gpu medium    # GPT-2 Medium (355M)"
         echo "       make gpu large     # GPT-2 Large (774M)"
+        echo ""
+        echo "     GPU INT8 build (W8A8, requires sm_75+ and gpt2_<size>_quant8.bin):"
+        echo "       make gpu int8 small"
+        echo "       make gpu int8 medium"
+        echo "       make gpu int8 large"
     fi
 
     echo ""
@@ -286,5 +381,6 @@ install_uv
 install_system_deps
 download_tokenizer
 download_weights
+download_int8_weights
 setup_python
 print_summary

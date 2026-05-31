@@ -50,13 +50,23 @@ uv sync
 
 ### 3. Download Model Weights
 
-Place weight files under the `weights/` directory:
+Place weight files under the `weights/` directory. `Params` identifies the model architecture (same number for FP32 and INT8 — they're the same model). `Disk size` is what actually gets downloaded.
 
-| Model | File | URL |
-|-------|------|-----|
-| Small (124M) | `gpt2_c_weights.bin` | https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_c_weights.bin |
-| Medium (355M) | `gpt2_medium_c_weights.bin` | https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_medium_c_weights.bin |
-| Large (774M) | `gpt2_large_c_weights.bin` | https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_large_c_weights.bin |
+**FP32 weights** (required for CPU, GPU FP32, GPU BF16, and GPU FP16 builds — the loader converts FP32 → BF16/FP16 on the fly):
+
+| Model  | Params | Disk size | File | URL |
+|--------|--------|-----------|------|-----|
+| Small  | 124M   | ~622 MB   | `gpt2_c_weights.bin`        | https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_c_weights.bin |
+| Medium | 355M   | ~1.6 GB   | `gpt2_medium_c_weights.bin` | https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_medium_c_weights.bin |
+| Large  | 774M   | ~3.2 GB   | `gpt2_large_c_weights.bin`  | https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_large_c_weights.bin |
+
+**INT8 quantized weights** (optional — only needed for the GPU INT8 build). Each size needs both the `.bin` (quantized weights) and the small `.json` sidecar (per-channel scales + tensor layout). Disk size is *not* `¼ × FP32` because only the four large matmul weights (`W_qkv`, `attn_proj`, `W1`, `W2`) are stored INT8 — embeddings, LayerNorm gain/bias, and matmul biases stay FP32.
+
+| Model  | Params | Disk size | Files | URLs |
+|--------|--------|-----------|-------|------|
+| Small  | 124M   | ~233 MB   | `gpt2_small_quant8.bin`  + `gpt2_small_quant8.json`  | https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_small_quant8.bin<br>https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_small_quant8.json |
+| Medium | 355M   | ~491 MB   | `gpt2_medium_quant8.bin` + `gpt2_medium_quant8.json` | https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_medium_quant8.bin<br>https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_medium_quant8.json |
+| Large  | 774M   | ~930 MB   | `gpt2_large_quant8.bin`  + `gpt2_large_quant8.json`  | https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_large_quant8.bin<br>https://huggingface.co/roeybh/gpt2-small-from-scratch-c/resolve/main/gpt2_large_quant8.json |
 
 ### 4. Download Tokenizer
 
@@ -112,6 +122,22 @@ The `bf16` and `fp16` flags only apply to GPU builds; using them without `gpu` w
 
 The on-disk weight `.bin` is FP32 in every build — the loader converts to the build's storage dtype on the fly, so the same weight file works for all three.
 
+### GPU INT8 Build (W8A8)
+
+A separate **W8A8** path: weights are stored INT8 with per-output-channel FP32 scales (offline-quantized), and activations are quantized per-token to INT8 at runtime. GEMMs run on cuBLAS INT8 tensor cores with INT32 accumulators, then dequant + bias is applied to produce BF16 activations for the rest of the layer (LayerNorm, softmax, etc. stay in higher precision). Only the four large weight matrices are quantized — `W_qkv`, `attn_proj`, `W1`, `W2` — embeddings, LayerNorm, and biases stay FP32.
+
+```bash
+make gpu int8 small      # → out/gpu/int8/gpt2_small
+make gpu int8 medium     # → out/gpu/int8/gpt2_medium
+make gpu int8 large      # → out/gpu/int8/gpt2_large
+```
+
+**Requirements:**
+- NVIDIA GPU with **compute capability >= 7.5** (Turing or newer). The runtime checks at startup and fails fast on older hardware.
+- Separate weight files: `weights/gpt2_<size>_quant8.bin` and `weights/gpt2_<size>_quant8.json` (see the optional download table above, or generate them yourself with the offline quant tool under `tools/offline_quant/`).
+
+**Accuracy:** see `tests/paper_validation/int8_vs_bf16.md` for the bf16-vs-int8 comparison across the paper validation suite (small/medium/large). Headline: 4/18 greedy cases byte-identical to bf16; the rest diverge mid-stream but stay coherent on both sides.
+
 ### Cleaning
 
 ```bash
@@ -148,6 +174,11 @@ GPU inference (BF16 / FP16):
 ```bash
 ./out/gpu/bf16/gpt2_small --prompt "Once upon a time..."
 ./out/gpu/fp16/gpt2_small --prompt "Once upon a time..."
+```
+
+GPU inference (INT8 W8A8, requires sm_75+ and `gpt2_<size>_quant8.bin`):
+```bash
+./out/gpu/int8/gpt2_small --prompt "Once upon a time..."
 ```
 
 ---
