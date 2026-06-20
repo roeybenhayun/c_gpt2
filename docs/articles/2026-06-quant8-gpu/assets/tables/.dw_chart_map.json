@@ -1,0 +1,7 @@
+{
+  "accuracy-int8-vs-bf16-greedy.png": "1wFIk",
+  "decode-tps-5080.png": "v0vlK",
+  "memory-savings.png": "dC65i",
+  "quantized-tensors.png": "CBTGy",
+  "workload-presets-int8.png": "GUAPX"
+}
