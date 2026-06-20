@@ -21,14 +21,16 @@ def _save(fig, out_path: Path) -> Path:
 
 
 def plot_distribution_with_amax(W: np.ndarray, label: str, out_path: Path) -> Path:
-    amax = float(np.max(np.abs(W)))
+    w_max = float(W.max())
+    w_min = float(W.min())
+    amax = float(max(abs(w_max), abs(w_min)))
     fig, ax = plt.subplots(figsize=(7.5, 4))
     ax.hist(W.ravel(), bins=200, color="#4c78a8", edgecolor="none")
-    ax.axvline( amax, color="red", linestyle="--", label=f"+amax = {amax:.4f}")
-    ax.axvline(-amax, color="red", linestyle="--", label=f"-amax = {-amax:.4f}")
+    ax.axvline(w_max, color="red", linestyle="--", label=f"max(W) = {w_max:+.4f}")
+    ax.axvline(w_min, color="red", linestyle="--", label=f"min(W) = {w_min:+.4f}")
     ax.set_xlabel("FP32 value")
     ax.set_ylabel("count")
-    ax.set_title(f"{label}: weight distribution (FP32, all rows)")
+    ax.set_title(f"{label}: FP32 weight distribution  (amax = {amax:.4f})")
     ax.legend()
     return _save(fig, out_path)
 
@@ -137,17 +139,19 @@ def plot_cross_model_memory(
 def plot_side_by_side_distributions(
     tensors: list[tuple[str, np.ndarray]], out_path: Path
 ) -> Path:
-    """1×N row of distribution histograms with per-panel amax annotations."""
+    """1×N row of distribution histograms with per-panel max/min annotations."""
     n = len(tensors)
     fig, axes = plt.subplots(1, n, figsize=(6.5 * n, 4), squeeze=False)
     for ax, (label, W) in zip(axes[0], tensors):
-        amax = float(np.max(np.abs(W)))
+        w_max = float(W.max())
+        w_min = float(W.min())
+        amax = float(max(abs(w_max), abs(w_min)))
         ax.hist(W.ravel(), bins=200, color="#4c78a8", edgecolor="none")
-        ax.axvline( amax, color="red", linestyle="--", label=f"+amax = {amax:.4f}")
-        ax.axvline(-amax, color="red", linestyle="--")
+        ax.axvline(w_max, color="red", linestyle="--", label=f"max(W) = {w_max:+.4f}")
+        ax.axvline(w_min, color="red", linestyle="--", label=f"min(W) = {w_min:+.4f}")
         ax.set_xlabel("FP32 value")
         ax.set_ylabel("count")
-        ax.set_title(label)
+        ax.set_title(f"{label}  (amax = {amax:.4f})")
         ax.legend(loc="upper right")
     return _save(fig, out_path)
 
