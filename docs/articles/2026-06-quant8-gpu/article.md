@@ -33,28 +33,28 @@ Model quantization replaces a high-precision tensor (FP32 / BF16) with a lower-p
 
 ### The formula
 
-Per-channel symmetric quantization with FP32 scales. For an output channel $c$ of weight tensor $W \in \mathbb{R}^{n \times m}$:
+Per-channel symmetric quantization with FP32 scales. For each output channel of the weight matrix, the scale and quantized values are:
 
 $$
 s_c = \frac{\max_i |W_{i,c}|}{127}, \qquad
 W^{\text{int8}}_{i,c} = \text{round}\left(\frac{W_{i,c}}{s_c}\right) \in [-127, 127]
 $$
 
-Dequantization is just multiplication: $\hat W_{i,c} = s_c \cdot W^{\text{int8}}_{i,c}$. The quantization error per element is bounded by $s_c / 2$ (uniform rounding noise).
+Dequantization is just multiplication: each INT8 value times its column's scale. The quantization error per element is bounded by `scale / 2` (uniform rounding noise).
 
-**Why `amax / 127` and not `amax / 128`?** The INT8 range is $[-128, 127]$ — 256 distinct codes. Symmetric quantization wants the two extremes of the weight distribution, $+w_{\max}$ and $-w_{\max}$, to land on equally extreme INT8 codes, so that dequantization brings them back to $\pm w_{\max}$ the same way on both sides.
+**Why `amax / 127` and not `amax / 128`?** The INT8 range is `[−128, 127]` — 256 distinct codes. Symmetric quantization wants the two extremes of the weight distribution, `+w_max` and `−w_max`, to land on equally extreme INT8 codes, so that dequantization brings them back to `±w_max` the same way on both sides.
 
-Try $s = w_{\max} / 128$:
-- $+w_{\max}$ would need to map to INT8 code $+128$ — but $+128$ doesn't exist in INT8 and gets clipped to $+127$. Dequantization then returns $127 \cdot (w_{\max}/128) \approx 0.992 \cdot w_{\max}$ — slightly compressed.
-- $-w_{\max}$ maps cleanly to $-128$ and dequantizes back to exactly $-w_{\max}$.
+Try `scale = w_max / 128`:
+- `+w_max` would need to map to INT8 code `+128` — but `+128` doesn't exist in INT8 and gets clipped to `+127`. Dequantization then returns `127 × (w_max / 128) ≈ 0.992 × w_max` — slightly compressed.
+- `−w_max` maps cleanly to `−128` and dequantizes back to exactly `−w_max`.
 
 After quantize → dequantize, the two extremes come back as *different values* — the positive side is slightly off, the negative side is exact. That's the asymmetric bias: a systematic error that always points the same way (positive values come back slightly smaller, negative values come back unchanged).
 
-Try $s = w_{\max} / 127$:
-- $+w_{\max}$ maps to $+127$, dequantizes back to $+w_{\max}$ exactly.
-- $-w_{\max}$ maps to $-127$, dequantizes back to $-w_{\max}$ exactly.
+Try `scale = w_max / 127`:
+- `+w_max` maps to `+127`, dequantizes back to `+w_max` exactly.
+- `−w_max` maps to `−127`, dequantizes back to `−w_max` exactly.
 
-Both extremes come back unchanged after quantize → dequantize. The cost is that the $-128$ code is never used — only 255 of the 256 codes carry data. That's a fair price for a bias-free codebook, and it's the standard convention for INT8 weight quantization across the LLM ecosystem.
+Both extremes come back unchanged after quantize → dequantize. The cost is that the `−128` code is never used — only 255 of the 256 codes carry data. That's a fair price for a bias-free codebook, and it's the standard convention for INT8 weight quantization across the LLM ecosystem.
 
 ### A concrete example
 
