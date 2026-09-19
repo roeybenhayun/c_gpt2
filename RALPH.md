@@ -1,26 +1,34 @@
 # RALPH — GPT-2 Large BF16 GPU decode speedup
 
-## Goal — ROUND 2 (active)
+## Goal — ROUND 3 (active)
 
-Raise **GPT-2 Large, GPU BF16, decode-phase TPS from 91.19 to >= 150 TPS**
-(TPOT 10.88 -> <= 6.67 ms). Prefill performance is not the target, but must not
+Raise **GPT-2 Large, GPU BF16, decode-phase TPS from 213.25 to >= 250 TPS**
+(TPOT 4.60 -> <= 4.00 ms). Prefill performance is not the target, but must not
 regress by more than 10%. Small/medium models are not the target either; keep
 them working.
 
-**91.19 TPS is the verified round-2 baseline** (commit 3f47f3c; four runs:
-91.23, 91.26, 91.26, 91.19). Every delta is measured against it, not against
-round 1's numbers. Do not spend an iteration re-measuring it.
+**213.25 TPS is the verified round-3 baseline** (commit 2e5c184; four runs:
+213.10, 212.74, 213.99, 213.25; TPOT 4.60 ms). Every delta is measured against
+it. Do not spend an iteration re-measuring it.
 
-150 was chosen over a more ambitious 200 deliberately: it is reachable on the
-two highest-confidence candidates alone (see the menu), so the loop can exit
-cleanly rather than grinding to max-iterations chasing the last few percent.
-If it lands early with budget left, start a fresh round rather than moving the
-goalposts mid-loop — a moved target invalidates every delta already recorded.
+**Read this before picking a target or judging progress.** Kernel time is now
+~3.36 ms of the 4.60 ms token; the other ~1.24 ms is launch gap. Launch-overhead
+work — which is what all three wins so far were — can therefore never do better
+than **3.36 ms = 298 TPS**, and only by driving the gap to exactly zero, which
+is impossible. 250 asks for ~0.6 ms of the ~1.24 ms available, leaving real
+margin. Anything above ~280 requires reducing *kernel* time, not launches, and
+is a different kind of change.
 
-### Round 1 (complete, for reference)
+This round is harder than the last two. Rounds 1 and 2 each had 2-6 ms sitting
+on the table and were won with small, surgical edits. The remaining overhead is
+1.24 ms total and the leading candidate needs a structural change. Expect failed
+attempts, and log them properly.
 
-59.83 -> 91.19 TPS (+52.5%) against a 50% goal. Both wins were pure overhead
-removal, no new kernels and no math changed. Details in the results table.
+### Rounds 1-2 (complete, for reference)
+
+59.83 -> 91.19 -> 213.25 TPS, a cumulative **3.6x**. Three accepted changes, all
+the same shape: the cost was kernel launches, not arithmetic. No new CUDA kernel
+was written in either round. Details in the results table.
 
 Branch: `perf/bf16-large-decode`.
 
@@ -48,7 +56,7 @@ Before the final commit of the whole effort, run the full `make gpu bf16` and
 
 ## Measurement rules
 
-1. **The round-2 baseline is already verified: 91.19 TPS / 10.88 ms TPOT.**
+1. **The round-3 baseline is already verified: 213.25 TPS / 4.60 ms TPOT.**
    Do not spend an iteration re-measuring it. Iteration 1 should be a real
    optimization attempt.
 2. **Noise floor: 2%.** A delta below 2% is noise, not an improvement. Do not
@@ -123,11 +131,11 @@ One optimization per iteration. Do not batch two ideas into one measurement.
 5. Append one row to the results table with the measured TPS.
 6. **Improved (>2%) and correctness gate passes** → `git commit` with a message
    naming the change and the TPS delta, e.g.
-   `Fuse QKV into one GEMM: 91.2 -> 101.3 TPS (+11%)`.
+   `Fuse QKV into one GEMM: 213.2 -> 236.7 TPS (+11%)`.
    **Otherwise** → revert the working tree (`git checkout -- <files>`) and add an
    entry under "Tried and rejected" explaining *why* it did not help, in enough
    detail that a future iteration does not retry it blindly.
-7. When large decode TPS >= 150 (round-2 goal, from the verified 91.19
+7. When large decode TPS >= 250 (round-3 goal, from the verified 213.25
    baseline), output `<promise>PERF GOAL REACHED</promise>`.
 
 Never rewrite or delete past rows in the results table or past entries in
@@ -139,102 +147,101 @@ working-tree changes. (The `--headless` flag in `scripts/performance_analysis.py
 was uncommitted while the loop ran; it is committed now and documented in the
 README.)
 
-## Where the time goes (measured 2026-09-19, current build)
+## Where the time goes (measured 2026-09-19, post-round-2 build)
 
-Fresh nsys profile of the **post-round-1** build (`make gpu bf16 large`,
-64 tokens). Read this before picking anything — it overturns two assumptions
-that the round-1 version of this file got wrong.
+Fresh nsys profile of the **current** build (commit 2e5c184, 64 tokens). The
+round-2 version of this section described a build that no longer exists and its
+attribution was wrong by ~60% — re-profile before trusting any table here.
 
-**1. Only ~56% of the token is kernel execution.** Kernel time sums to ~6.1 ms
-against a 10.88 ms token. The other **~4.8 ms/token is gap** — launch overhead
-and the blocking logit copy. At ~2,100 launches/token and ~2 us of CPU launch
-cost each, the arithmetic matches the observed gap almost exactly. **This is
-the single largest line item in the whole profile and nothing is computing
-during it.**
+| | value |
+|---|---|
+| TPOT | **4.60 ms** |
+| kernel time | **~3.36 ms/token** (73%) |
+| launch gap | **~1.24 ms/token** (27%) |
+| launches | **~780/token** (was ~2,100 pre-round-2) |
+| implied overhead | ~1.6 us per launch |
 
-**2. The big weight GEMVs are already near the hardware limit.** cuBLAS is not
-the problem:
+**The hard cap on launch-overhead work is 3.36 ms = 298 TPS**, reachable only
+with zero gap. Everything above that requires cutting kernel time.
 
-| work | ms/token | launches/token | achieved bandwidth |
-|------|----------|----------------|--------------------|
-| MLP GEMVs (W1, W2) | 1.26 | 72 | **749 GB/s = 78% of peak** |
-| Q/K/V + attn_proj GEMVs | 0.99 | 144 | 475 GB/s = 50% |
-| lm_head GEMV | 0.16 | 1 | **794 GB/s = 83% of peak** |
-| per-head attention GEMVs | 1.78 | **720** | tiny matrices, launch-dominated |
-| misc gemv variants | ~1.1 | ~570 | |
-| layernorm / add_bias / softmax / add_2d | ~0.7 | ~600 | |
+Largest kernel line items per token:
 
-So the waste is in **launch count and small operations**, not arithmetic.
-Round 1 won twice on exactly this and the pattern has not been exhausted.
+| work | ms/token | launches/token | note |
+|------|----------|----------------|------|
+| mixed gemvx (MLP + batched attention) | ~1.28 | ~102 | 749 GB/s on the MLP pair = 78% of peak |
+| Q/K/V + attn_proj GEMVs | 0.98 | 144 | **475 GB/s = 50% of peak** — the weakest GEMM |
+| lm_head GEMV | 0.18 | 1 | 794 GB/s = 83% of peak |
+| layernorm | 0.26 | 73 | |
+| add_bias | 0.20 | 216 | trivial work, many launches |
+| softmax | 0.18 | 48 | already batched in round 1 |
+| add_2d / gelu / concat_heads | 0.15 | ~154 | trivial work, many launches |
 
-**Bandwidth ceiling.** ~1.54 GB of weights per token (708M transformer params +
-64M tied lm_head, at 2 bytes) at the 5080's ~960 GB/s = **~1.61 ms/token, i.e.
-~620 TPS**. Current 10.88 ms is 6.8x above it. 620 is unreachable in practice;
-70-80% of it (~430-500 TPS) is what an excellent implementation looks like.
-The 150 goal is well inside physics — it is an engineering problem, not a
-hardware one.
+**Bandwidth ceiling unchanged:** ~1.54 GB of weights per token at ~960 GB/s =
+**~1.61 ms/token = ~620 TPS**. Current 4.60 ms is 2.9x above it, down from 10x
+at the start of round 1. The easy overhead is gone; what remains is either
+structural (graphs) or arithmetic efficiency (fused QKV).
 
-Caveats on the numbers above: the profile includes the 19-token prefill, which
-slightly inflates per-token figures, and nsys adds its own overhead. The
-ranking is solid; the specific ms values are +/-15%.
+Caveats: the profile includes the 19-token prefill and nsys adds its own
+overhead. Ranking is solid, absolute ms are +/-15%.
 
 ## Candidate menu (re-ranked against the profile above)
 
-1. **CUDA graph capture of the decode step.** Targets the measured ~4.8 ms gap
-   directly — the largest single item, and the only one backed by a direct
-   measurement rather than inference. The decode kernel sequence is fixed at
-   M=1, which is the case graphs exist for.
+1. **CUDA graph capture of the decode step.** The only candidate that addresses
+   the full 1.24 ms gap. Realistically recovers 70-80% of it (graph replay still
+   costs ~0.3-0.5 us per node), so expect ~3.75 ms = **~265 TPS**. This alone
+   should clear the 250 goal.
 
-   **Read this before starting, it will save you two iterations:** kernel
-   arguments are baked in at capture time, and `n_tokens` increments every
+   **The shape problem — read before starting, it will save you two iterations.**
+   Kernel arguments are baked in at capture time, and `n_tokens` increments every
    decode step, so a naive capture breaks on the second token. Workable
-   approaches: capture against fixed max-context buffers and pass the live
-   length via device memory; capture per bucketed sequence length; or
-   `cudaGraphExecUpdate` to patch args between launches. **If a first attempt
-   fails on the shape problem, that is not evidence that graphs do not work
-   here — do not log it under "Tried and rejected" as though it were.**
+   approaches: capture against fixed max-context buffers and pass the live length
+   via device memory; capture per bucketed sequence length and re-capture on
+   bucket crossings; or `cudaGraphExecUpdate` to patch args between launches.
+   Note the sampling tail (D->H logit copy + CPU top-k) cannot be captured —
+   capture the transformer forward and leave the tail outside.
+   **If a first attempt fails on the shape problem, that is not evidence that
+   graphs do not work here. Do not log it under "Tried and rejected" as such.**
 
-2. **Batch the per-head attention GEMVs.** 720 launches/token and 1.78 ms for
-   matrices too small to saturate anything. `cublasGemmStridedBatched` collapses
-   them to 2 per layer = 72/token. This is exactly the round-1 softmax win
-   applied to the GEMVs beside it, and the per-head score rows that made that
-   possible already exist (see iteration 2).
+2. **Fuse Q/K/V into one GEMM.** 144 launches/token at only **50% of peak
+   bandwidth** — the least efficient GEMM left, and the only remaining item that
+   cuts *kernel* time rather than launches. One concatenated [3*d_model, d_model]
+   weight = one launch and one pass over the activation, and the larger matrix
+   should lift that 50%. Worth ~0.3-0.4 ms. Combines with candidate 1 rather
+   than competing with it.
 
-3. **Fuse Q/K/V into one GEMM.** 3 separate `cublasGemmEx` per layer at only 50%
-   of peak bandwidth. One concatenated [3*d_model, d_model] weight = one launch
-   and one pass over the activation, and the larger matrix should lift that 50%.
+3. **Fuse the elementwise epilogues.** add_bias (216 launches/token), add_2d,
+   gelu, concat_heads, layernorm — ~600 tiny launches/token for ~0.6 ms of
+   trivial work. Fusing bias+GELU into the MLP GEMV epilogue and residual+LN
+   into one kernel cuts both launch count and HBM round trips. Note this
+   overlaps candidate 1: if graphs land first, the launch half of this win is
+   already banked and only the memory traffic remains.
 
-4. **Fuse the epilogues.** bias+GELU into the first MLP GEMV; residual add +
-   layernorm (`cuda/add_2d.cu` + `cuda/layernorm.cu`). ~600 launches/token of
-   trivial elementwise work. Individually small, collectively ~0.7 ms.
+4. **GPU-side top-k.** Removes the blocking 100 KB D->H logit copy and its sync
+   at `gpt2.c:2184`. Sampling is ~0.2 ms of a 4.60 ms token, so ~4% — but it
+   also removes the one thing that forces a sync per token, which may matter
+   more once graphs are in. Reassess after candidate 1.
 
-5. **GPU-side top-k.** Would also remove the blocking 100 KB D->H logit copy and
-   its sync at `gpt2.c:2184`. But sampling is now only ~0.2 ms of a 10.88 ms
-   token after round 1, so this is worth ~2% at best. Low priority despite
-   being conceptually tidy.
+5. **Custom BF16 GEMV kernels for M=1. STILL DEMOTED.** cuBLAS achieves 78-83%
+   of peak on the MLP and lm_head GEMVs; beating it there is hard and worth
+   little. The 50%-efficiency Q/K/V GEMVs are the only tempting target, and
+   candidate 2 likely fixes those more cheaply.
 
-6. **Custom BF16 GEMV kernels for M=1. DEMOTED — read before attempting.** The
-   round-1 file listed this as a headline candidate. The profile says otherwise:
-   cuBLAS already achieves 78-83% of peak on the MLP and lm_head GEMVs. Beating
-   it there is hard and worth at most ~0.8 ms even if perfect. Only worth
-   touching the Q/K/V-sized matrices (50% of peak), and candidate 3 probably
-   fixes those more cheaply.
+6. **INT8 weights / flash-attention decode / persistent kernels.** The only
+   levers that move the 1.61 ms bandwidth floor itself rather than closing the
+   gap to it. INT8 would halve weight traffic. Large project, out of scope for
+   a 250 TPS goal, and the INT8 path already exists separately in this repo.
 
-7. **Flash-attention-style decode / persistent kernels / INT8 weights.** A
-   structurally different decode path, 300-400 TPS class, much bigger project.
-   INT8 is the one lever that moves the bandwidth wall itself rather than
-   improving efficiency against it. Out of scope for a 150 TPS goal.
-
-8. **Re-profile when the ranking goes stale.** `./scripts/run.sh --bf16 large
-   --profile` runs under nsys. The table above was measured on the round-1
-   build; after two or three accepted changes it will no longer describe
-   reality, and a fresh kernel-time breakdown is a perfectly good iteration
-   output.
+7. **Re-profile when the ranking goes stale.** `./scripts/run.sh --bf16 large
+   --profile`. The table above describes commit 2e5c184; after one or two
+   accepted changes it will no longer describe reality. A fresh kernel-time
+   breakdown is a legitimate iteration output — and it has already corrected
+   itself once this effort.
 
 ## Results
 
-Append-only, across all rounds. Note the baseline changes between rounds:
-round 1 deltas are against 59.83, round 2 deltas are against **91.19**.
+Append-only, across all rounds. The baseline changes between rounds:
+round 1 deltas are against 59.83, round 2 against 91.19, round 3 against
+**213.25**.
 
 ### Round 1 — goal >= 89.7 TPS (complete)
 
@@ -258,7 +265,7 @@ Measured 91.19-91.26 across four runs = **+52.5%**, goal met.
 Both wins were overhead, not arithmetic: 2.76 ms/token of CPU qsort, and ~700
 redundant kernel launches per token. Neither needed a new CUDA kernel.
 
-### Round 2 — goal >= 150 TPS (active)
+### Round 2 — goal >= 150 TPS (complete)
 
 | iter | change | large decode TPS | delta vs best | verdict |
 |------|--------|------------------|---------------|---------|
@@ -284,6 +291,12 @@ graphs, fused QKV, fused epilogues) are still untried and the gap is now small
 enough that a fresh profile should precede any round 3: the round-2 profile in
 this file describes a build that no longer exists, and its attribution was
 already shown to be off once.
+
+### Round 3 — goal >= 250 TPS (active)
+
+| iter | change | large decode TPS | delta vs best | verdict |
+|------|--------|------------------|---------------|---------|
+| 0 | round-3 baseline = round-2 final, commit 2e5c184 (four runs: 213.10, 212.74, 213.99, 213.25; TPOT 4.60 ms = ~3.36 ms kernel + ~1.24 ms gap, ~780 launches/token) | **213.25** | — | **reference** |
 
 ## Tried and rejected
 
