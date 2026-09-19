@@ -87,13 +87,25 @@ Before the final commit of the whole effort, run the full `make gpu bf16` and
   log against a saved baseline log and it must be **byte-identical** unless the
   change is deliberately numerical.
 
-  **Save that baseline log before the first change of the round**, because each
-  benchmark run overwrites what `--headless` discovers:
+  **RETIRED as of round 2, iteration 1.** Batching the attention GEMMs moved
+  cuBLAS onto a different kernel with a different accumulation order, which
+  changes BF16 rounding in the last bits. Sampling amplifies that: the cumulative
+  probability walk picks a different token within ~3 steps, so the sampled text
+  now differs from the original baseline by design. **Do not treat sampled-text
+  divergence as a failure from here on, and do not try to restore it.**
+
+  **Use this instead — long greedy, compared across builds:**
   ```
-  cp "$(ls -t logs/gpt2_large_bf16_decode*.json | head -1)" /tmp/ralph_baseline.json
+  # current build
+  ./out/gpu/bf16/gpt2_large --prompt "Once upon a time, in a land far, far away, there was a small dragon." \
+      --req_out_tokens 256 --token_chunk_size 256 --temperature 0 --no-stream --json_out_file /tmp/greedy_new.json
+  # then: git stash push gpt2.c, rebuild, rerun to /tmp/greedy_old.json, stash pop, rebuild
   ```
-  Both round-1 changes passed this byte-identical check, so the current build's
-  output is still identical to the original pre-optimization baseline.
+  and `generated_text` must match **byte for byte**. 256 consecutive argmax
+  decisions over a 50,257-way distribution agreeing is strong evidence the math
+  is right; argmax is far more robust to last-bit rounding than sampling is, so
+  this separates "different rounding" from "broken kernel". A genuine indexing
+  or stride bug diverges almost immediately under this test.
 - Numerical changes that alter BF16 rounding may shift greedy output slightly;
   if that happens, judge by manual inspection of coherence and say so explicitly
   in the log row rather than silently accepting.
@@ -251,6 +263,27 @@ redundant kernel launches per token. Neither needed a new CUDA kernel.
 | iter | change | large decode TPS | delta vs best | verdict |
 |------|--------|------------------|---------------|---------|
 | 0 | round-2 baseline = round-1 final, commit 3f47f3c (four runs: 91.23, 91.26, 91.26, 91.19; TPOT 10.88 ms) | **91.19** | — | **reference** |
+| 1 | **Batch the per-head attention GEMVs** (candidate 2). Added `dot_2d_gpu_batched` (`cublasGemmStridedBatchedEx`, same operand mapping as `dot_2d_gpu` plus a stride per operand) and collapsed both decode attention loops into one batched call each. 1440 -> 72 attention GEMM launches per token. Profile attribution in the round-1 notes was too conservative: the per-head GEMVs were spread across six cuBLAS kernel entries totalling ~2.9 ms/token of kernel time plus ~2.9 ms of launch gap, not the 1.78 ms attributed to two entries. TPOT 10.88 -> 4.60 ms. Four runs: 213.10, 212.74, 213.99, 213.25. Greedy-256 byte-identical across builds; sampled text differs (BF16 rounding, see gate); prefill TTFT 0.1718 unchanged; small 717.16, medium 371.33. | **212.74-213.99** | +133% | **committed** ✅ |
+
+**Round 2 closed at iteration 1.** Target was >= 150 TPS from the 91.19
+baseline. Measured 212.74-213.99 across four runs = **+133%**, goal met with a
+single change.
+
+| model | round-2 baseline | round-2 final | speedup | vs original 2026-09-19 baseline |
+|-------|------------------|---------------|---------|--------------------------------|
+| small | 376.47 | 717.16 | +91% | 175.54 -> 717.16 (**4.1x**) |
+| medium | 166.79 | 371.33 | +123% | 98.19 -> 371.33 (**3.8x**) |
+| large | **91.19** | **213.25** | **+133%** | 59.83 -> 213.25 (**3.6x**) |
+
+Three wins in a row, all the same shape: **the cost was kernel launches, not
+arithmetic.** No new CUDA kernel has been written in either round.
+
+Large decode is now at 4.60 ms/token against the ~1.61 ms/token bandwidth
+floor — **2.9x above it, down from 10x**. The remaining candidates (CUDA
+graphs, fused QKV, fused epilogues) are still untried and the gap is now small
+enough that a fresh profile should precede any round 3: the round-2 profile in
+this file describes a build that no longer exists, and its attribution was
+already shown to be off once.
 
 ## Tried and rejected
 

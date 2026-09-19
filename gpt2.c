@@ -377,6 +377,60 @@ static void dot_2d_gpu(act_t *a,int a_r, int a_c, int lda, act_t *b,int b_r,int 
     }
 }
 
+/* Batched form of dot_2d_gpu for decode attention, where the same GEMM shape
+ * repeats once per head with a uniform stride between heads.
+ *
+ * Decode issued 20 score GEMVs + 20 context GEMVs per layer = 1440 launches per
+ * token on Large, 1.78 ms of kernel time for matrices far too small to saturate
+ * anything -- the cost was the launches, not the arithmetic.
+ *
+ * The operand mapping is identical to dot_2d_gpu (same row-major-expressed-as-
+ * column-major operand swap: C = A*B in row-major is computed as C^T = B^T*A^T,
+ * which is why b/ldb is passed first and a/lda second). Each operand gains a
+ * stride in elements between consecutive batch items.
+ */
+static void dot_2d_gpu_batched(act_t *a, int a_r, int a_c, int lda, long long stride_a,
+                               act_t *b, int b_r, int b_c, int ldb, long long stride_b,
+                               act_t *c_out, int c_r, int c_c, int ldc, long long stride_c,
+                               int batch_count, int transpose_b, int apply_attention_scaling) {
+    cublasHandle_t handle = get_cublas_handle();
+
+    float alpha = 1.0f;
+    if (apply_attention_scaling) {
+        alpha = 1.0f / sqrtf((float)a_c);
+    }
+    const float beta = 0.0f;
+
+    const int M = a_r;
+    const int K = a_c;
+    const int N = transpose_b ? b_r : b_c;
+
+    const cublasOperation_t opB = transpose_b ? CUBLAS_OP_T : CUBLAS_OP_N;
+    const cublasOperation_t opA = CUBLAS_OP_N;
+
+    cublasStatus_t stat = cublasGemmStridedBatchedEx(
+        handle, opB, opA, N, M, K,
+        &alpha,
+        b, GEMM_DATA_TYPE, ldb, stride_b,
+        a, GEMM_DATA_TYPE, lda, stride_a,
+        &beta,
+        c_out, GEMM_DATA_TYPE, ldc, stride_c,
+        batch_count,
+        CUBLAS_COMPUTE_32F,
+        CUBLAS_GEMM_DEFAULT);
+
+    if (stat != CUBLAS_STATUS_SUCCESS) {
+        fprintf(stderr,
+            "FATAL: cublasGemmStridedBatchedEx failed with status %d\n"
+            "  a[%d x %d] lda=%d stride=%lld   b[%d x %d] ldb=%d stride=%lld\n"
+            "  c[%d x %d] ldc=%d stride=%lld   batch=%d trans_b=%d\n"
+            "  cublas: M=%d N=%d K=%d\n",
+            stat, a_r, a_c, lda, stride_a, b_r, b_c, ldb, stride_b,
+            c_r, c_c, ldc, stride_c, batch_count, transpose_b, M, N, K);
+        abort();
+    }
+}
+
 #if defined(USE_INT8)
 /* Forward declarations of the per-GEMM scratch buffers — defined in the
  * global device-state block below. dot_2d_gpu_int8 references them by
@@ -1217,26 +1271,29 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
         _Static_assert(nof_heads <= ctx_len,
                        "decode attention stores one score row per head in scores_h_d");
 
-        // 1. Scores, per head: Q_last dot K_all -> [1 x head_dim] @ [head_dim x n_tokens]
-        for (int h = 0; h < nof_heads; h++) {
-            act_t *k_h = &K_cache_d[layer_id][0][0] + h * head_dim;
-            act_t *q_last_token_h = &Q_d[n_tokens - 1][0] + h * head_dim;
-            dot_2d(q_last_token_h, 1, head_dim, d_model, k_h, n_tokens, head_dim, d_model,
-                   &scores_h_d[h][0], 1, n_tokens, ctx_len, 1, APPLY_ATTENTION_SCALING);
-        }
+        // 1. Scores, all heads in one batched GEMM:
+        //    Q_last[h] dot K_all[h] -> [1 x head_dim] @ [head_dim x n_tokens]
+        //    Head h's Q and K slices are h*head_dim into a d_model-wide row, and
+        //    its score row is row h of scores_h_d — all three strides uniform.
+        dot_2d_gpu_batched(&Q_d[n_tokens - 1][0], 1, head_dim, d_model, head_dim,
+                           &K_cache_d[layer_id][0][0], n_tokens, head_dim, d_model, head_dim,
+                           &scores_h_d[0][0], 1, n_tokens, ctx_len, ctx_len,
+                           nof_heads, 1, APPLY_ATTENTION_SCALING);
 
         // 2. Softmax over every head's row in one launch. No causal mask: each
         //    row is the newest token, which attends to all prior tokens.
         softmax_cuda(&scores_h_d[0][0], nof_heads, n_tokens, ctx_len,
                      &weights_h_d[0][0], 1.0f, /*causal_mask=*/0);
 
-        // 3. Context, per head: Weights dot V_all -> [1 x n_tokens] @ [n_tokens x head_dim]
-        for (int h = 0; h < nof_heads; h++) {
-            act_t *v_h = &V_cache_d[layer_id][0][0] + h * head_dim;
-            act_t *context_last_row = &context_heads_d[h][0][0] + (n_tokens - 1) * head_dim;
-            dot_2d(&weights_h_d[h][0], 1, n_tokens, ctx_len, v_h, n_tokens, head_dim, d_model,
-                   context_last_row, 1, head_dim, head_dim, 0, !APPLY_ATTENTION_SCALING);
-        }
+        // 3. Context, all heads in one batched GEMM:
+        //    Weights[h] dot V_all[h] -> [1 x n_tokens] @ [n_tokens x head_dim]
+        //    context_heads_d is [nof_heads][ctx_len][head_dim], so consecutive
+        //    heads are ctx_len*head_dim apart at a fixed token row.
+        dot_2d_gpu_batched(&weights_h_d[0][0], 1, n_tokens, ctx_len, ctx_len,
+                           &V_cache_d[layer_id][0][0], n_tokens, head_dim, d_model, head_dim,
+                           &context_heads_d[0][0][0] + (n_tokens - 1) * head_dim,
+                           1, head_dim, head_dim, (long long)ctx_len * head_dim,
+                           nof_heads, 0, !APPLY_ATTENTION_SCALING);
     } else {
     for (int h=0 ; h < nof_heads; h++){
         act_t *q_h;
