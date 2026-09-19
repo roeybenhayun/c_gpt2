@@ -163,6 +163,25 @@ run is a zero-cost way to measure the sampling half of it.
 | 0b | baseline re-measured on this machine (2 runs, both 59.83; TPOT 16.63 ms) | 59.83 | — | **reference** |
 | — | `scripts/performance_analysis.py`: added `--headless` (tooling fix, not a perf change) | n/a | n/a | infrastructure |
 | 1 | **top_k_sample: replace full-vocabulary qsort with one-pass insertion top-k** (candidate 2, CPU half). Measured cost of the old qsort: 2.76 ms/token. TPOT 16.63 -> 13.71 ms. Two runs: 72.49, 72.54. All 768 sampled tokens byte-identical to baseline; greedy gate matches. | **72.49** | +21.2% | **committed** ✅ |
+| 2 | **Batch the decode softmax across heads** (candidate 7, found by profiling = candidate 8). nsys showed `softmax_kernel` at 19.4% of GPU time with 46,144 launches / 64 tokens = 721 per token (20 heads x 36 layers), ~2 us each, i.e. almost pure launch overhead. Split the decode attention into 3 passes (scores -> one batched softmax -> context) so each head owns a row of `scores_h_d`; softmax is one block per row, so rows=nof_heads batches it with no kernel change. 720 -> 36 softmax launches per token. TPOT 13.71 -> 10.88 ms. Four runs: 91.23, 91.26, 91.26, 91.19. Text byte-identical; greedy matches; prefill TTFT 0.1718 vs 0.1720 pre-change (no regression); small 376.47, medium 166.79 both fine. | **91.19-91.26** | +25.9% | **committed** ✅ |
+
+### Goal reached
+
+Target was >= 89.7 TPS (1.5x the verified 59.83 baseline). Measured 91.19-91.26
+across four runs, i.e. **+52.5% over baseline** — the 50% goal is met.
+
+Full picture, GPU BF16 decode preset, RTX 5080:
+
+| model | baseline TPS | final TPS | speedup |
+|-------|--------------|-----------|---------|
+| small | 175.54 | 376.47 | +114% |
+| medium | 98.19 | 166.79 | +70% |
+| large | **59.83** | **91.19** | **+52.5%** |
+
+Both wins were overhead, not arithmetic: 2.76 ms/token of CPU qsort, and ~700
+redundant kernel launches per token. Large decode is still ~6.8x above the
+~1.61 ms/token bandwidth floor, so candidates 1 and 3-6 remain untried if more
+is wanted later.
 
 ## Tried and rejected
 

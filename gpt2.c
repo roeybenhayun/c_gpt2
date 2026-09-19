@@ -1197,6 +1197,47 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
     /// To optimize this loop. No need to recompute entire attention matrix at every single
     // step. Need to calc attention for the last token only during the generation 
     // phase. which means calc 1xn_tokens instead of n_tokens x n_tokens matrix
+    if(n_new_tokens == 1){
+        /* Decode phase: one query row per head.
+         *
+         * This used to run scores -> softmax -> context head by head, which
+         * launched softmax_cuda once per (layer x head): 20 heads x 36 layers =
+         * 720 launches per token on Large. Profiling put softmax_kernel at 19.4%
+         * of all GPU time for ~2 us of work per launch — essentially pure launch
+         * overhead.
+         *
+         * The three stages are split into three passes instead, so the softmax
+         * for every head goes out in a single launch (36 per token, not 720).
+         * Each head gets its own row of the scores/weights scratch rather than
+         * all heads sharing row (n_tokens-1); softmax_kernel is one block per
+         * row, so rows = nof_heads batches the heads with no kernel change.
+         *
+         * scores_h_d / weights_h_d are [ctx_len][ctx_len] and nof_heads is 20
+         * for the largest GPT-2, so the head rows always fit. */
+        _Static_assert(nof_heads <= ctx_len,
+                       "decode attention stores one score row per head in scores_h_d");
+
+        // 1. Scores, per head: Q_last dot K_all -> [1 x head_dim] @ [head_dim x n_tokens]
+        for (int h = 0; h < nof_heads; h++) {
+            act_t *k_h = &K_cache_d[layer_id][0][0] + h * head_dim;
+            act_t *q_last_token_h = &Q_d[n_tokens - 1][0] + h * head_dim;
+            dot_2d(q_last_token_h, 1, head_dim, d_model, k_h, n_tokens, head_dim, d_model,
+                   &scores_h_d[h][0], 1, n_tokens, ctx_len, 1, APPLY_ATTENTION_SCALING);
+        }
+
+        // 2. Softmax over every head's row in one launch. No causal mask: each
+        //    row is the newest token, which attends to all prior tokens.
+        softmax_cuda(&scores_h_d[0][0], nof_heads, n_tokens, ctx_len,
+                     &weights_h_d[0][0], 1.0f, /*causal_mask=*/0);
+
+        // 3. Context, per head: Weights dot V_all -> [1 x n_tokens] @ [n_tokens x head_dim]
+        for (int h = 0; h < nof_heads; h++) {
+            act_t *v_h = &V_cache_d[layer_id][0][0] + h * head_dim;
+            act_t *context_last_row = &context_heads_d[h][0][0] + (n_tokens - 1) * head_dim;
+            dot_2d(&weights_h_d[h][0], 1, n_tokens, ctx_len, v_h, n_tokens, head_dim, d_model,
+                   context_last_row, 1, head_dim, head_dim, 0, !APPLY_ATTENTION_SCALING);
+        }
+    } else {
     for (int h=0 ; h < nof_heads; h++){
         act_t *q_h;
         act_t *k_h;
@@ -1206,20 +1247,7 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
         k_h = &K_cache_d[layer_id][0][0]+ h * head_dim;
         v_h = &V_cache_d[layer_id][0][0]+ h * head_dim;
 
-        if(n_new_tokens == 1){
-            act_t* q_last_token_h = &Q_d[n_tokens - 1][0] + h * head_dim;
-            act_t* scores_last_row = &scores_h_d[n_tokens - 1][0];
-            act_t* weights_last_row = &weights_h_d[n_tokens - 1][0];
-            act_t* context_last_row = context_h_out + (n_tokens - 1) * head_dim;
-             // 1. Calculate scores: Q_last dot K_all -> [1 x head_dim] @ [head_dim x n_tokens] = [1 x n_tokens]
-            dot_2d(q_last_token_h, 1, head_dim, d_model, k_h, n_tokens, head_dim, d_model, scores_last_row, 1, n_tokens, ctx_len, 1, APPLY_ATTENTION_SCALING);
-            
-            // Causal mask is implicit up to n_tokens-1, no need to apply for the last row.
-            // 2. Softmax on the single row of scores (no causal mask: the single row attends to all prior tokens)
-            softmax_cuda(scores_last_row, 1, n_tokens, ctx_len, weights_last_row, 1.0f, /*causal_mask=*/0);
-            // 3. Calculate context: Weights_last dot V_all -> [1 x n_tokens] @ [n_tokens x head_dim] = [1 x head_dim]
-            dot_2d(weights_last_row, 1, n_tokens, ctx_len, v_h, n_tokens, head_dim, d_model, context_last_row, 1, head_dim, head_dim, 0, !APPLY_ATTENTION_SCALING);
-        } else {
+        {
             // prefill
             q_h = &Q_d[0][0]+ h * head_dim;
             dot_2d(q_h,n_tokens,head_dim,d_model,k_h,n_tokens,head_dim,d_model,&scores_h_d[0][0],n_tokens,n_tokens,ctx_len,1,APPLY_ATTENTION_SCALING);
@@ -1234,6 +1262,7 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
             dot_2d(&weights_h_d[0][0],n_tokens,n_tokens,ctx_len,v_h,n_tokens,head_dim,d_model,context_h_out,n_tokens,head_dim,head_dim,0,!APPLY_ATTENTION_SCALING);
         }
                                
+    }
     }
 
     if(n_new_tokens == 1){
