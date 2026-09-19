@@ -191,6 +191,17 @@ overhead. Ranking is solid, absolute ms are +/-15%.
    costs ~0.3-0.5 us per node), so expect ~3.75 ms = **~265 TPS**. This alone
    should clear the 250 goal.
 
+   **PREREQUISITE FOUND IN ROUND 3 ITERATION 1 — read this first.** Every
+   custom kernel in `cuda/*.cu` launches on the **default stream**
+   (`kernel<<<grid, block>>>` with no stream argument), and cuBLAS has never had
+   `cublasSetStream` called on it. **The legacy default stream cannot be
+   stream-captured**, so `cudaStreamBeginCapture` cannot work until every launch
+   and the cuBLAS handle are moved onto an explicit non-default stream. That is
+   a mechanical but repo-wide refactor (9 wrapper functions plus the handle) and
+   it must land *before* any capture attempt. Budget it as its own iteration and
+   commit it as infrastructure — measured neutral is the expected and acceptable
+   result for it, so do not revert it for failing to improve TPS.
+
    **The shape problem — read before starting, it will save you two iterations.**
    Kernel arguments are baked in at capture time, and `n_tokens` increments every
    decode step, so a naive capture breaks on the second token. Workable
@@ -297,6 +308,7 @@ already shown to be off once.
 | iter | change | large decode TPS | delta vs best | verdict |
 |------|--------|------------------|---------------|---------|
 | 0 | round-3 baseline = round-2 final, commit 2e5c184 (four runs: 213.10, 212.74, 213.99, 213.25; TPOT 4.60 ms = ~3.36 ms kernel + ~1.24 ms gap, ~780 launches/token) | **213.25** | — | **reference** |
+| 1 | **Fuse Q/K/V into one GEMM** (candidate 2, taken ahead of candidate 1 because graphs turned out to be blocked on a prerequisite — see menu). One `[3*d_model, d_model]` weight built device-side at load, one GEMM into a packed scratch, then `qkv_bias_scatter_cuda` adds the fused bias and scatters into Q / K-cache / V-cache. 6 launches per layer (3 GEMM + 3 add_bias) -> 2, i.e. 216 -> 72 per token. TPOT 4.60 -> 4.27 ms. Four runs: 227.04, 230.24, 229.98, 229.43. Greedy-256 byte-identical across builds; prefill TTFT 0.1760 vs 0.1718 (+2.4%, inside the 10% allowance); small 805.08, medium 401.49. Costs ~354 MB extra VRAM for the fused copy (originals kept for the INT8/CPU paths). | **227.0-230.2** | +7.5% | **committed** ✅ |
 
 ## Tried and rejected
 

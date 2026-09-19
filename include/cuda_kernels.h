@@ -56,6 +56,13 @@ void concat_heads_cuda(act_t *src, act_t *dest, int token_index, int _nof_heads,
 
 void add_2d_cuda(act_t *a, int a_r, int a_c, act_t *b, act_t * out);
 
+/* Adds the fused QKV bias and scatters a packed [n_rows x 3*d] projection into
+ * the Q buffer and the K/V caches, each of which has row stride dst_stride.
+ * Replaces three add_bias_cuda launches per layer. */
+void qkv_bias_scatter_cuda(const act_t *qkv, const weight_t *bias,
+                           act_t *q_dst, act_t *k_dst, act_t *v_dst,
+                           int n_rows, int d, int dst_stride);
+
 #if defined(USE_INT8)
 /* Per-token dynamic INT8 quantization of an activation matrix.
  *   X       in:  [tokens, d] BF16

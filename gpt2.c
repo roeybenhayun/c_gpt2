@@ -771,6 +771,14 @@ weight_t (*wpe_d)[d_model];
 
 /***  Attention (per-layer) ***/
 weight_t (*W_q_d)[d_model][d_model];
+#if !defined(USE_INT8)
+/* Fused Q|K|V projection weight and bias, built once at load time by
+ * concatenating W_q/W_k/W_v along the output dimension. Lets the three
+ * per-layer GEMMs collapse into one. */
+weight_t (*W_qkv_d)[3*d_model][d_model];
+weight_t (*b_qkv_d)[3*d_model];
+act_t (*QKV_scratch_d)[3*d_model];
+#endif
 weight_t (*W_k_d)[d_model][d_model];
 weight_t (*W_v_d)[d_model][d_model];
 weight_t (*b_q_d)[d_model];
@@ -884,6 +892,8 @@ act_t final_attention_output[ctx_len][d_model] = {};
 
 
 typedef struct{
+    weight_t * W_qkv;   /* fused [3*d_model, d_model]; GPU non-INT8 path */
+    weight_t * b_qkv;   /* fused [3*d_model] */
     weight_t * W_q;
     weight_t * W_k;
     weight_t * W_v;
@@ -938,6 +948,11 @@ static void allocate_weights_gpu(void){
     CUDA_CHECK(cudaMalloc((void **)&wpe_d, ctx_len * sizeof *wpe_d));
     CUDA_CHECK(cudaMalloc((void **)&wte_T_d, d_model * sizeof *wte_T_d));
 
+#if !defined(USE_INT8)
+    CUDA_CHECK(cudaMalloc((void **)&W_qkv_d, num_layers * sizeof *W_qkv_d));
+    CUDA_CHECK(cudaMalloc((void **)&b_qkv_d, num_layers * sizeof *b_qkv_d));
+    CUDA_CHECK(cudaMalloc((void **)&QKV_scratch_d, ctx_len * sizeof *QKV_scratch_d));
+#endif
     CUDA_CHECK(cudaMalloc((void **)&W_q_d, num_layers * sizeof *W_q_d));
     CUDA_CHECK(cudaMalloc((void **)&W_k_d, num_layers * sizeof *W_k_d));
     CUDA_CHECK(cudaMalloc((void **)&W_v_d, num_layers * sizeof *W_v_d));
@@ -1112,6 +1127,10 @@ static void allocate_weights_cpu(void){
 static void update_layer_table(void){
 #ifdef USE_CUDA
     for (int l=0; l < num_layers ; l++){
+#if !defined(USE_INT8)
+        layer[l].W_qkv = &W_qkv_d[l][0][0];
+        layer[l].b_qkv = &b_qkv_d[l][0];
+#endif
         layer[l].W_q = &W_q_d[l][0][0];
         layer[l].W_k = &W_k_d[l][0][0];
         layer[l].W_v = &W_v_d[l][0][0];
@@ -1214,29 +1233,30 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
     // QKV
             
     
+    act_t* k_cache_ptr = &K_cache_d[layer_id][cache_start_index][0];
+    act_t* v_cache_ptr = &V_cache_d[layer_id][cache_start_index][0];
+
 #if defined(USE_INT8)
     dot_2d_gpu_int8(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_q_int8,d_model,d_model,d_model,tbp->W_q_scale,&Q_d[cache_start_index][0],n_new_tokens,d_model,d_model);
-#else
-    dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_q,d_model,d_model,d_model,&Q_d[cache_start_index][0],n_new_tokens, d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-#endif
     add_bias_cuda(&Q_d[cache_start_index][0],n_new_tokens,d_model,tbp->b_q,NULL);
-    // final destination pointer in the cache
-
-    act_t* k_cache_ptr = &K_cache_d[layer_id][cache_start_index][0];
-#if defined(USE_INT8)
     dot_2d_gpu_int8(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_k_int8,d_model,d_model,d_model,tbp->W_k_scale,k_cache_ptr,n_new_tokens,d_model,d_model);
-#else
-    dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_k,d_model,d_model,d_model,k_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-#endif
     add_bias_cuda(k_cache_ptr,n_new_tokens,d_model,tbp->b_k,NULL);
-
-    act_t* v_cache_ptr = &V_cache_d[layer_id][cache_start_index][0];
-#if defined(USE_INT8)
     dot_2d_gpu_int8(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_v_int8,d_model,d_model,d_model,tbp->W_v_scale,v_cache_ptr,n_new_tokens,d_model,d_model);
-#else
-    dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_v,d_model,d_model,d_model,v_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-#endif
     add_bias_cuda(v_cache_ptr,n_new_tokens,d_model,tbp->b_v,NULL);
+#else
+    /* Fused Q|K|V: one [3*d_model, d_model] GEMM into a packed scratch, then a
+     * single kernel that adds the bias and scatters into Q / K-cache / V-cache.
+     * 2 launches per layer instead of 6 (3 GEMMs + 3 add_bias), and the larger
+     * matrix uses the memory system better than three [d_model x d_model] ones,
+     * which the profile showed running at only ~50% of peak bandwidth. */
+    dot_2d(&X_norm_d[cache_start_index][0], n_new_tokens, d_model, d_model,
+           tbp->W_qkv, 3*d_model, d_model, d_model,
+           &QKV_scratch_d[0][0], n_new_tokens, 3*d_model, 3*d_model,
+           1, !APPLY_ATTENTION_SCALING);
+    qkv_bias_scatter_cuda(&QKV_scratch_d[0][0], tbp->b_qkv,
+                          &Q_d[cache_start_index][0], k_cache_ptr, v_cache_ptr,
+                          n_new_tokens, d_model, d_model);
+#endif
     
     last_index = n_tokens;
  
@@ -1759,6 +1779,24 @@ static void copy_weights_to_gpu(void){
     CUDA_CHECK(cudaMemcpy(b_q_d,  b_q, num_layers * sizeof (*b_q_d),cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(b_k_d,  b_k, num_layers * sizeof (*b_k_d),cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(b_v_d,  b_v, num_layers * sizeof (*b_v_d),cudaMemcpyHostToDevice));
+
+#if !defined(USE_INT8)
+    /* Build the fused Q|K|V weight and bias from the tensors just uploaded.
+     * Device-to-device so it costs nothing on the host side, and it happens
+     * once at load. W_q/W_k/W_v stay allocated (the INT8 and CPU paths and the
+     * layer table still reference them); the fused copy costs an extra
+     * 3*d_model*d_model*num_layers weights of VRAM. */
+    for (int l = 0; l < num_layers; l++) {
+        const size_t w_bytes = (size_t)d_model * d_model * sizeof(weight_t);
+        const size_t b_bytes = (size_t)d_model * sizeof(weight_t);
+        CUDA_CHECK(cudaMemcpy(&W_qkv_d[l][0][0],             &W_q_d[l][0][0], w_bytes, cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(&W_qkv_d[l][d_model][0],       &W_k_d[l][0][0], w_bytes, cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(&W_qkv_d[l][2*d_model][0],     &W_v_d[l][0][0], w_bytes, cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(&b_qkv_d[l][0],                &b_q_d[l][0],    b_bytes, cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(&b_qkv_d[l][d_model],          &b_k_d[l][0],    b_bytes, cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(&b_qkv_d[l][2*d_model],        &b_v_d[l][0],    b_bytes, cudaMemcpyDeviceToDevice));
+    }
+#endif
 
     CUDA_CHECK(cudaMemcpy(layer_norm1_gamma_d,  layer_norm1_gamma, num_layers * sizeof (*layer_norm1_gamma_d),cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(layer_norm1_beta_d,  layer_norm1_beta, num_layers * sizeof (*layer_norm1_beta_d),cudaMemcpyHostToDevice));
