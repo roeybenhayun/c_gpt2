@@ -1362,11 +1362,12 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
         dot_2d(&final_attention_output_d[i][0],1,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context_d[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
 #endif
 
-        // Attn projection bias
-        add_bias_cuda(&context_d[i][0],1,d_model,tbp->attn_proj_bias,NULL);
-
-        // 3. Residual connection
-        add_2d_cuda(input + (i * d_model),1,d_model,&context_d[i][0],&residual_out_d[i][0]);
+        // Attn projection bias + residual connection, fused into one pass.
+        // Was add_bias_cuda then add_2d_cuda: two launches, and the biased
+        // projection made a pointless round trip through HBM between them.
+        add_bias_residual_cuda(&context_d[i][0], tbp->attn_proj_bias,
+                               input + (i * d_model), &residual_out_d[i][0],
+                               1, d_model);
 
 
         // 4. Layer Norm 2 (on the last token only)
@@ -1390,7 +1391,7 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
         dot_2d(&X1_out_d[i][0],1,d_ff,d_ff,tbp->W2,d_model,d_ff,d_ff,&X2_out_d[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
 #endif
         // W2 bias
-        add_bias_cuda(&X2_out_d[i][0],1,d_model,tbp->b2,NULL);
+
 
         // 6. Final Residual Connection (for the last token only)
         //
@@ -1408,7 +1409,10 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
         //
         // It cost up to 2 MB per layer, ~72 MB per token on Large, and 36
         // synchronous D2D copies per token that stalled the pipeline.
-        add_2d_cuda(&residual_out_d[i][0], 1, d_model, &X2_out_d[i][0], &residual2_out_d[i][0]);
+        // W2 bias + residual, fused (see the attention join above).
+        add_bias_residual_cuda(&X2_out_d[i][0], tbp->b2,
+                               &residual_out_d[i][0], &residual2_out_d[i][0],
+                               1, d_model);
 
     } else {
         // prefill phase — run the post-attention pipeline for all n_tokens rows

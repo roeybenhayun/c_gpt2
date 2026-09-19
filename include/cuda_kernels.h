@@ -56,6 +56,12 @@ void concat_heads_cuda(act_t *src, act_t *dest, int token_index, int _nof_heads,
 
 void add_2d_cuda(act_t *a, int a_r, int a_c, act_t *b, act_t * out);
 
+/* out = residual + (x + bias). Fuses the add_bias_cuda + add_2d_cuda pair used
+ * at both transformer residual joins. Rows are contiguous (stride == n_cols). */
+void add_bias_residual_cuda(const act_t *x, const weight_t *bias,
+                            const act_t *residual, act_t *out,
+                            int n_rows, int n_cols);
+
 /* Adds the fused QKV bias and scatters a packed [n_rows x 3*d] projection into
  * the Q buffer and the K/V caches, each of which has row stride dst_stride.
  * Replaces three add_bias_cuda launches per layer. */
