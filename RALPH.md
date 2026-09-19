@@ -335,6 +335,36 @@ above it**, from 10x at the start of round 1. Remaining untried: CUDA graphs
 and the structural items in candidate 6. **Re-profile before round 4** — the
 table above describes commit 012e2e9 and is already stale.
 
+### Cross-dtype verification (FP32 / INT8), after round 3
+
+Three of round 3's four changes are **not** dtype-guarded — the dead-memcpy
+removal, the bias+residual fusion and the bias+GELU fusion apply to every GPU
+build. The fused QKV is `#if !defined(USE_INT8)`, so INT8 keeps its three
+separate quantized GEMMs but FP32 does use the fused path. All three dtypes were
+therefore re-measured against commit 2e5c184 (the round-3 baseline).
+
+| build | before | after | delta |
+|-------|--------|-------|-------|
+| GPU FP32, large | 155.01 | **174.78** | **+12.8%** |
+| GPU INT8, large | 182.91 | **194.83** | **+6.5%** |
+| GPU BF16, large | 213.25 | **259.67** | **+21.8%** |
+
+No regression anywhere; every dtype gained. All sizes build and run coherently
+in both extra dtypes (FP32 717/326/175, INT8 663/346/195 for small/medium/large).
+
+**Accuracy note — INT8 improved.** FP32 greedy-256 is byte-identical across the
+change. INT8 greedy-256 is *not* identical to its old self, which looked like a
+red flag but is the opposite: measured against the BF16 reference output, the
+**old** INT8 build diverged after 52 characters while the **new** one matches
+for all 996. The fusions compute `x + bias + residual` (and `gelu(x + bias)`)
+in float with a single rounding, where the unfused pair rounded to the storage
+dtype, wrote to memory, read back, and rounded again. One rounding instead of
+two matters most where the activation error is already largest, which is INT8.
+
+**Lesson for future rounds:** a fused kernel is not numerically neutral. Judge
+"different output" against the highest-precision reference available, not
+against the previous build of the same dtype.
+
 ## Tried and rejected
 
 _(append entries here: what was tried, measured TPS, and why it did not help.
