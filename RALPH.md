@@ -98,10 +98,11 @@ One optimization per iteration. Do not batch two ideas into one measurement.
 Never rewrite or delete past rows in the results table or past entries in
 "Tried and rejected". Append only. This file is the loop's only memory.
 
-**Revert carefully.** `scripts/performance_analysis.py` carries an intentional
-uncommitted change (the `--headless` flag). Step 6's revert must name only the
-files the iteration actually touched — never `git checkout -- .` — or the
-tooling fix is lost and every later iteration hangs on `plt.show()`.
+**Revert carefully.** Step 6's revert must name only the files the iteration
+actually touched — never `git checkout -- .`, which would also discard unrelated
+working-tree changes. (The `--headless` flag in `scripts/performance_analysis.py`
+was uncommitted while the loop ran; it is committed now and documented in the
+README.)
 
 ## Where the time goes (starting knowledge)
 

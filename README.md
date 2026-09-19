@@ -240,6 +240,26 @@ uv run python scripts/performance_analysis.py --cpu --gpu --bf16 --balanced
 
 Series flags: `--cpu`, `--gpu`, `--bf16`. Preset flags: `--decode`, `--prefill`, `--balanced` (mutually exclusive). Override the directory globbed for JSONs with `--log-dir <path>` (default: `logs`) — useful for analysing archived runs (e.g. cloud results under `logs/lambda/h100/<run>/`) without disturbing your local `logs/`.
 
+#### Headless mode
+
+`--headless` prints the summary table for the latest matching log and exits immediately — no plots, no comparison charts, nothing written to `plots/`:
+
+```bash
+uv run python scripts/performance_analysis.py --bf16 --headless           # latest BF16 run, all sizes
+uv run python scripts/performance_analysis.py --bf16 --decode --headless  # …decode preset only
+```
+
+```
+--- Summary Metrics ---
+Model              Tag        TTFT (s)     Mean TPOT (ms)   TPS        E2E (s)
+----------------------------------------------------------------------------
+Gpt-2 Large        GPU BF16   0.0767       10.88            91.19      8.42
+```
+
+Use it over a display-less connection (SSH, CI, a scripted optimise-build-measure loop) and whenever you only want the numbers. The normal mode ends in a blocking `plt.show()`, which has nowhere to draw without a display and will hang until interrupted; `--headless` selects the non-interactive Agg backend before `pyplot` is imported and returns in well under a second.
+
+Pass only the series you actually want. `--gpu --bf16` will happily report an FP32 row from an old log alongside the BF16 one, since discovery picks the most recent file per series independently.
+
 ### Long-prompt prefill benchmark
 
 For benchmarking prompt length and measuring TTFT (pure prefill time) directly:
