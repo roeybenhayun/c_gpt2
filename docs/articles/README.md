@@ -10,6 +10,8 @@ Long-form writing about this project. Each article folder contains its own `arti
 | 2026-03-09 | [cublas-vs-openblas-matmul](2026-03-cublas-vs-openblas-matmul/article.md) | cuBLAS vs OpenBLAS: Benchmarking Matrix Multiply for GPT-2 | published | [link](https://rbenhayun.substack.com/p/2d-dot-product-using-gpu-and-cpu) |
 | 2026-04-26 | [gpu-inference](2026-04-gpu-inference/article.md) | GPT-2 in C — now on GPU with 9× faster inference | published | [link](https://rbenhayun.substack.com/p/gpt-2-in-c-now-on-gpu-with-9-faster) |
 | 2026-05    | [fp32-to-bf16-gpu](2026-05-fp32-to-bf16-gpu/article.md) | GPT-2 in C — FP32 to BF16 on GPU | drafting | — |
+| 2026-06    | [quant8-gpu](2026-06-quant8-gpu/article.md) | GPT-2 in C — INT8 on GPU | drafting | — |
+| 2026-09    | [ralph-loop-decode-perf](2026-09-ralph-loop-decode-perf/article.md) | GPT-2 in C — a 4.3× decode speedup, found by an agent loop | drafting | — |
 
 ## Conventions
 
