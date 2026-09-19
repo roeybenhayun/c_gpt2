@@ -1393,13 +1393,21 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
         add_bias_cuda(&X2_out_d[i][0],1,d_model,tbp->b2,NULL);
 
         // 6. Final Residual Connection (for the last token only)
-        // First, preserve the state of previous tokens by copying them over
-        if (i > 0) {
-            cudaMemcpy(&residual2_out_d[0][0], input, i * d_model * sizeof(act_t), cudaMemcpyDeviceToDevice);
-            //memcpy(&residual2_out[0][0], input, i * d_model * sizeof(float));
-        }
-        // Then, calculate the new residual for the last token /////CUDA is missing///
-        //add_2d(&X2_out[0][0],n_tokens,d_model,&residual_out[0][0],&residual2_out[0][0]);
+        //
+        // A blocking cudaMemcpy used to copy rows 0..i-1 of `input` into
+        // residual2_out_d here, to "preserve the state of previous tokens".
+        // It was dead work during decode, twice over:
+        //
+        //   * From layer 1 on, current_hidden_state_d IS &residual2_out_d[0][0]
+        //     (see the layer loop), so src == dst — a self-copy.
+        //   * Nothing reads those rows. Within a layer only row i is touched
+        //     (LN1 runs on n_new_tokens rows from cache_start_index, and the
+        //     residual reads input + i*d_model), and the final LayerNorm reads
+        //     only last_token_position. Token history lives in the KV caches,
+        //     not here.
+        //
+        // It cost up to 2 MB per layer, ~72 MB per token on Large, and 36
+        // synchronous D2D copies per token that stalled the pipeline.
         add_2d_cuda(&residual_out_d[i][0], 1, d_model, &X2_out_d[i][0], &residual2_out_d[i][0]);
 
     } else {
