@@ -1381,9 +1381,9 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
         dot_2d(&X_norm2_d[i][0],1,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out_d[i][0],1,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
 #endif
         // W1 bias
-        add_bias_cuda(&X1_out_d[i][0],1,d_ff,tbp->b1,NULL);
-        // GELU activation
-        gelu_cuda(&X1_out_d[i][0],d_ff,1,NULL);
+        // W1 bias + GELU, fused into one pass. Separately these wrote and then
+        // re-read the full [1 x d_ff] activation, the widest in the layer.
+        bias_gelu_cuda(&X1_out_d[i][0], tbp->b1, 1, d_ff);
         // W2
 #if defined(USE_INT8)
         dot_2d_gpu_int8(&X1_out_d[i][0],1,d_ff,d_ff,tbp->W2_int8,d_model,d_ff,d_ff,tbp->W2_scale,&X2_out_d[i][0],1,d_model,d_model);

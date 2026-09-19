@@ -311,6 +311,29 @@ already shown to be off once.
 | 1 | **Fuse Q/K/V into one GEMM** (candidate 2, taken ahead of candidate 1 because graphs turned out to be blocked on a prerequisite — see menu). One `[3*d_model, d_model]` weight built device-side at load, one GEMM into a packed scratch, then `qkv_bias_scatter_cuda` adds the fused bias and scatters into Q / K-cache / V-cache. 6 launches per layer (3 GEMM + 3 add_bias) -> 2, i.e. 216 -> 72 per token. TPOT 4.60 -> 4.27 ms. Four runs: 227.04, 230.24, 229.98, 229.43. Greedy-256 byte-identical across builds; prefill TTFT 0.1760 vs 0.1718 (+2.4%, inside the 10% allowance); small 805.08, medium 401.49. Costs ~354 MB extra VRAM for the fused copy (originals kept for the INT8/CPU paths). | **227.0-230.2** | +7.5% | **committed** ✅ |
 | 2 | **Remove a dead per-layer `cudaMemcpy` from the decode path** (not on the menu; found while reading the residual join for candidate 3). A blocking D2D copy preserved rows 0..i-1 of the hidden state every layer. It was dead twice over: from layer 1 on `current_hidden_state_d` IS `residual2_out_d` so src==dst, and nothing reads those rows (LN1 and the residual touch only row i; the final LN reads only last_token_position; history lives in the KV caches). Cost up to 2 MB/layer, ~72 MB/token, and 36 synchronous copies/token. TPOT 4.27 -> 4.12 ms. Four runs: 235.54, 237.15, 236.76, 238.47. Greedy-256 identical; prefill TTFT 0.1755 vs 0.1718 (+2.2%); small 820.40, medium 415.02. Smaller than hoped — the syncs were not as costly as the 36-per-token count suggested. | **235.5-238.5** | +3.1% | **committed** ✅ |
 | 3 | **Fuse add_bias + add_2d at both residual joins** (candidate 3, first half). `add_bias_residual_cuda` computes `residual + (x + bias)` in one pass, replacing two launches and a pointless HBM round trip at each join. 144 -> 72 launches/token. TPOT 4.12 -> 3.97 ms. **Six runs: 243.43, 248.77, 246.76, 248.64, 245.40, 246.35 — median 246.8, range 243-249.** Greedy-256 identical; prefill TTFT 0.1740 vs 0.1718; small 865.06, medium 439.41. **Note the spread: ~2.3% run-to-run at this TPOT, up from <0.5% earlier in the effort. Near-goal claims now need the *minimum* of several runs above the bar, not the mean.** | **246.8** (median) | +4.0% | **committed** ✅ |
+| 4 | **Fuse add_bias + gelu on the MLP first projection** (candidate 3, second half). `bias_gelu_cuda` computes `gelu(x + bias)` in one in-place pass; the tanh approximation matches `gelu_kernel` exactly. Separately these wrote and re-read the full `[1 x d_ff]` activation — the widest in the layer — and cost an extra launch per layer. TPOT 3.97 -> 3.76 ms. **Five runs: 258.72, 259.62, 259.72, 260.07, 259.67 — minimum 258.72, spread back to ~0.5%.** Greedy-256 identical; prefill TTFT 0.1718 = baseline exactly; small 897.06, medium 457.48. | **258.7-260.1** | +5.3% | **committed** ✅ |
+
+**Round 3 closed at iteration 4.** Target was >= 250 TPS from the 213.25
+baseline. Measured **258.72-260.07 across five runs (minimum 258.72)** =
+**+21.6%**, goal met. Judged on the minimum rather than the mean, per the
+variance note in iteration 3.
+
+| model | round-3 baseline | round-3 final | speedup | vs original baseline |
+|-------|------------------|---------------|---------|----------------------|
+| small | 376.47 | 897.06 | +138% | 175.54 -> 897.06 (**5.1x**) |
+| medium | 166.79 | 457.48 | +174% | 98.19 -> 457.48 (**4.7x**) |
+| large | **213.25** | **259.67** | **+21.8%** | 59.83 -> 259.67 (**4.3x**) |
+
+Four accepted changes, none of them the menu's #1 candidate: CUDA graphs was
+never attempted because it is blocked on a stream refactor (see candidate 1).
+Three of the four were still launch/round-trip removal; the fourth was deleting
+work that did not need doing at all.
+
+Large decode is now ~3.76 ms against the ~1.61 ms bandwidth floor — **2.3x
+above it**, from 10x at the start of round 1. Remaining untried: CUDA graphs
+(needs the stream refactor first), the `concat_heads` and `layernorm` launches,
+and the structural items in candidate 6. **Re-profile before round 4** — the
+table above describes commit 012e2e9 and is already stale.
 
 ## Tried and rejected
 

@@ -56,6 +56,10 @@ void concat_heads_cuda(act_t *src, act_t *dest, int token_index, int _nof_heads,
 
 void add_2d_cuda(act_t *a, int a_r, int a_c, act_t *b, act_t * out);
 
+/* x = gelu(x + bias), in place. Fuses the add_bias_cuda + gelu_cuda pair on the
+ * MLP's first projection. Rows are contiguous (stride == n_cols). */
+void bias_gelu_cuda(act_t *x, const weight_t *bias, int n_rows, int n_cols);
+
 /* out = residual + (x + bias). Fuses the add_bias_cuda + add_2d_cuda pair used
  * at both transformer residual joins. Rows are contiguous (stride == n_cols). */
 void add_bias_residual_cuda(const act_t *x, const weight_t *bias,
