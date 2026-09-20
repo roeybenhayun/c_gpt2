@@ -11,6 +11,9 @@ Three rounds later, decode throughput on GPT-2 Large had gone from **59.8 to 259
 The headline result is not the interesting part. The interesting part is *what kind* of optimization it found: **not one of the seven was arithmetic.** No hand-written GEMM, no new matmul kernel, no algorithmic change to attention. Every win was removing kernel launches, redundant trips through memory, or work that did not need doing at all.
 
 > **Asset checklist**
+> - [x] ralph_loop.png
+> - [x] ralph_brief.png
+> - [x] ralph_one_iteration.png
 > - [x] decode_tps_vs_ceiling.png
 
 ### How this article is organized
@@ -25,19 +28,11 @@ The headline result is not the interesting part. The interesting part is *what k
 
 ## The loop
 
-The mechanism is crude and that is the point. A stop hook intercepts the agent when it tries to finish and re-feeds the identical prompt. There is no memory between iterations except **what is on disk** — the files and the git history.
+![The loop: a stop hook re-feeds the identical prompt after every turn, and RALPH.md is the only thing that survives between them](assets/diagrams/ralph_loop.png)
 
-That constraint drives the whole design. Since the prompt never changes, all the state has to live in a file. I kept a `RALPH.md` at the repo root holding:
+![RALPH.md: the goal, the exact commands, the measurement rules, the correctness gate, and the two append-only sections that stop the loop re-trying the same idea](assets/diagrams/ralph_brief.png)
 
-- the **goal** and a verified baseline number,
-- the **exact** build / benchmark / analyze commands,
-- a **noise floor** (2%) and the rule that anything in the 2–4% band gets re-run,
-- a **correctness gate**,
-- an append-only **results table** and a **"Tried and rejected"** section.
-
-The last two matter most. Without them the loop re-tries the same idea forever, because from its point of view every iteration is the first one.
-
-The prompt itself ended up being three sentences that delegate everything to the file. Every number I duplicated into the prompt was a number that later drifted out of sync with the file — the first run declared victory on a stale target that the file had already moved.
+![One turn: read the brief, pick one candidate, implement it minimally, build and measure, then commit or revert through a single gate](assets/diagrams/ralph_one_iteration.png)
 
 ## The results
 
