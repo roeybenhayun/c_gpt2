@@ -12,8 +12,8 @@ The headline result is not the interesting part. The interesting part is *what k
 
 > **Asset checklist**
 > - [x] ralph_loop.png
-> - [x] ralph_brief.png
 > - [x] ralph_one_iteration.png
+> - [ ] ralph_brief.png — not in the body; optional footer image for the post
 > - [x] decode_tps_vs_ceiling.png
 
 ### How this article is organized
@@ -28,13 +28,21 @@ The headline result is not the interesting part. The interesting part is *what k
 
 ## The loop
 
+The mechanism is crude and that is the point. A stop hook intercepts the agent when it tries to finish and re-feeds the identical prompt. There is no memory between iterations except **what is on disk** — the files and the git history.
+
 ![The loop: a stop hook re-feeds the identical prompt after every turn, and RALPH.md is the only thing that survives between them](assets/diagrams/ralph_loop.png)
 
-![RALPH.md: the goal, the exact commands, the measurement rules, the correctness gate, and the two append-only sections that stop the loop re-trying the same idea](assets/diagrams/ralph_brief.png)
+That constraint drives the whole design. Since the prompt never changes, all the state has to live in a file. I kept a `RALPH.md` at the repo root holding the goal and a verified baseline, the exact build/benchmark/analyze commands, a 2% noise floor, a correctness gate — and two append-only sections: a **results table** and a list of everything **tried and rejected**.
 
-![One turn: read the brief, pick one candidate, implement it minimally, build and measure, then commit or revert through a single gate](assets/diagrams/ralph_one_iteration.png)
+Those last two matter most. Without them the loop re-tries the same idea forever, because from its point of view every iteration is the first one. A correction written into the file — a profile attribution that was off by 60%, say — is the only kind of correction that survives.
+
+The prompt itself ended up being three sentences that delegate everything to the file. Every number I duplicated into it was a number that later drifted out of sync: the first run declared victory on a stale target the file had already moved.
 
 ## The results
+
+Every row below came out of the same six steps, and the gate in the middle is what keeps the table honest — a change that does not clear the noise floor, or that alters 256 greedy tokens, is reverted rather than argued with.
+
+![One turn: read the brief, pick one candidate, implement it minimally, build and measure, then commit or revert through a single gate](assets/diagrams/ralph_one_iteration.png)
 
 Baseline: GPT-2 Large, BF16, GPU decode, RTX 5080 — **59.83 TPS**, 16.63 ms per token.
 
