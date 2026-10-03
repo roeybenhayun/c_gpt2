@@ -185,7 +185,9 @@ What made the loop work here is that performance optimization comes with its own
 
 ## See also
 
-- [GPT-2 in C — INT8 on GPU](../2026-06-quant8-gpu/article.md)
-- [GPT-2 in C — FP32 to BF16 on GPU](../2026-05-fp32-to-bf16-gpu/article.md)
-- [GPT-2 in C — now on GPU with 9× faster inference](../2026-04-gpu-inference/article.md)
+- [GPT-2 in C — INT8 on GPU](https://rbenhayun.substack.com/p/gpt-2-in-c-int8-on-gpu)
+- [GPT-2 in C — FP32 to BF16 on GPU](https://rbenhayun.substack.com/p/gpt-2-in-c-fp32-to-bf16-on-gpu)
+- [GPT-2 in C — now on GPU with 9× faster inference](https://rbenhayun.substack.com/p/gpt-2-in-c-now-on-gpu-with-9-faster)
+- [cuBLAS vs OpenBLAS: benchmarking matrix multiply for GPT-2](https://rbenhayun.substack.com/p/2d-dot-product-using-gpu-and-cpu)
+- [Building GPT-2 in C — now with KV-Cache and 10× faster inference](https://rbenhayun.substack.com/p/building-gpt-2-small-in-c-a-from)
 - [Ralph Wiggum as a software engineer](https://ghuntley.com/ralph/) — the original technique
