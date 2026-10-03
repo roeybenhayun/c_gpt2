@@ -201,22 +201,39 @@ def _build_csv(headers, rows):
     return buf.getvalue()
 
 
-def _build_metadata(headers, alignments, col_widths):
+def _build_metadata(headers, alignments, col_widths, col_types=None):
     """Translate the simple alignments/col_widths from tables.py into
     Datawrapper's per-column metadata structure.
 
     Datawrapper expects column keys to match header names. For tables charts,
     the visualize.columns map controls per-column type, alignment, and width
     (as a fraction of the chart width)."""
+    # col_types is optional and defaults to "auto" per column. Pass "text" for a
+    # column whose values only look numeric — Datawrapper's sniffer strips signs
+    # and units, so "+21%" renders as 21 and "246.80" as 246.8 under "auto".
+    if col_types is None:
+        col_types = ["auto"] * len(headers)
+
     columns = {}
-    for header, align, width in zip(headers, alignments, col_widths):
+    for header, align, width, ctype in zip(headers, alignments, col_widths, col_types):
         columns[str(header)] = {
             "align": align,            # 'left' / 'center' / 'right'
             "width": float(width),     # fraction of total width
-            "type": "auto",            # let Datawrapper sniff number vs text
+            "type": ctype,             # "auto" sniffs number vs text; "text" forces verbatim
             "format": "0,0.[00]",      # nice number formatting where applicable
         }
+    # Datawrapper keeps the *parsing* type under data.column-format; the entry in
+    # visualize.columns only controls display. Setting it in visualize alone is
+    # silently ignored, which is why "+21%" kept rendering as 21.
+    column_format = {
+        str(header): {"type": ctype, "ignore": False}
+        for header, ctype in zip(headers, col_types)
+    }
+
     return {
+        "data": {
+            "column-format": column_format,
+        },
         "visualize": {
             "columns": columns,
             "search": False,
@@ -293,9 +310,10 @@ def render_one_table(spec, *, token, output_dir, chart_map, dry_run, index, tota
     rows = spec["rows"]
     alignments = spec.get("alignments") or ["center"] * len(headers)
     col_widths = spec.get("col_widths") or [1.0 / len(headers)] * len(headers)
+    col_types = spec.get("col_types")  # optional; None -> all "auto"
 
     csv_text = _build_csv(headers, rows)
-    metadata = _build_metadata(headers, alignments, col_widths)
+    metadata = _build_metadata(headers, alignments, col_widths, col_types)
 
     if dry_run:
         existing = chart_map.get(filename)

@@ -1,10 +1,10 @@
-# GPT-2 in C — 4.3× faster decode, found by an agent loop
+# GPT-2 in C — 4.3× faster decode, found by a Ralph loop in Claude Code
 
 _The sixth article in the series: from CPU baseline, to KV-cache, to GPU, to BF16, to INT8 — and now a performance round where the optimizations were found by Claude Code running in a Ralph loop. Measured on a local RTX 5080._
 
 ## Intro
 
-The previous five articles were hand-written optimization work: KV-cache, cuBLAS, BF16, INT8. This one is different. I pointed [Claude Code](https://claude.com/claude-code) at the repo with a single instruction — *make GPT-2 Large BF16 decode 50% faster* — and let it run in a **Ralph loop**: the same prompt fed back after every turn, so the agent iterates against its own committed work until the goal is met.
+The previous five articles were hand-written optimization work: KV-cache, cuBLAS, BF16, INT8. This one is different. I gave [Claude Code](https://claude.com/claude-code) a goal — *make GPT-2 Large BF16 decode 50% faster* — and ran it under the **Ralph Loop plugin**, which installs a stop hook that re-feeds the same prompt every time the agent tries to finish. The agent keeps iterating against its own committed work until the goal is met. The loop itself is simple; what it buys is persistence.
 
 Three rounds later, decode throughput on GPT-2 Large had gone from **59.8 to 259.7 tokens/sec — 4.3×** — across seven accepted changes.
 
@@ -58,7 +58,7 @@ Baseline: GPT-2 Large, BF16, GPU decode, RTX 5080 — **59.83 TPS**, 16.63 ms pe
 | 6 | [Fuse bias + residual at both joins](https://github.com/roeybenhayun/c_gpt2/commit/012e2e9) | 246.80 | +4.0% |
 | 7 | [Fuse bias + GELU on the MLP projection](https://github.com/roeybenhayun/c_gpt2/commit/2a183a7) | 259.67 | +5.3% |
 
-Each row links to its commit — one change, one commit, one measurement.
+Each row links to its commit — one change, one commit, one measurement. All of them in order: [the full merge](https://github.com/roeybenhayun/c_gpt2/compare/81d7293...5ff7c0a).
 
 Across all three sizes, and the other two dtypes:
 
