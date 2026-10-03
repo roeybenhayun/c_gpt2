@@ -1,4 +1,4 @@
-# GPT-2 in C — a 4.3× decode speedup, found by an agent loop
+# GPT-2 in C — 4.3× faster decode, found by an agent loop
 
 _The sixth article in the series: from CPU baseline, to KV-cache, to GPU, to BF16, to INT8 — and now a performance round where the optimizations were found by Claude Code running in a Ralph loop. Measured on a local RTX 5080._
 
