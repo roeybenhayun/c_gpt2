@@ -1,9 +1,21 @@
 import json
-import matplotlib.pyplot as plt
+import matplotlib
 import numpy as np
 import os
 import glob
 import sys
+
+# --- Headless mode ---
+# `--headless` prints the summary metrics for the latest discovered run(s) and
+# skips every figure: no comparison plots, no PNGs, no blocking plt.show().
+# Intended for automated/CI use where a display is unavailable. The backend has
+# to be selected before pyplot is imported, so the flag is read straight from
+# argv here rather than in the main CLI parsing block below.
+HEADLESS = "--headless" in sys.argv[1:]
+if HEADLESS:
+    matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 
 # --- Configuration ---
 
@@ -100,6 +112,9 @@ is_manual_mode = any(files.values())
 #   Preset flag : --decode | --prefill | --balanced  (matches run.sh's preset
 #                  embedded in log filenames; if none given, no preset filter)
 #   --log-dir <path>  : override the directory globbed for log JSONs (default: logs)
+#   --headless        : print the summary metrics for the latest discovered
+#                       run(s) and exit — no plots, no comparison charts, no
+#                       blocking plt.show(). Parsed at import time (see top).
 
 # Pull --log-dir out before the set-based flag parsing — set() discards the
 # value that follows the flag, so it can't ride along with the booleans.
@@ -434,7 +449,16 @@ def plot_summary_bars(ax):
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3, axis='y')
 
-    # Print summary table to console
+def print_summary_table():
+    """Print the summary metrics table for every active series to the console.
+
+    Split out of plot_summary_bars so it can run without an axis (headless
+    mode), and so it prints once per invocation rather than once per figure
+    the bars are drawn into.
+    """
+    all_jsons = [s[1] for s in ACTIVE_SERIES]
+    model_names = [m for m in files.keys() if any(m in j for j in all_jsons)]
+
     print("\n--- Summary Metrics ---")
     print(f"{'Model':<18} {'Tag':<10} {'TTFT (s)':<12} {'Mean TPOT (ms)':<16} {'TPS':<10} {'E2E (s)':<10}")
     print("-" * 76)
@@ -618,6 +642,13 @@ def save_individual_plot(plot_func, filename, figsize=(10, 7)):
     print(f"  -> Saved {path}")
     plt.close(fig)
 
+# --- Headless: print metrics for the latest run(s) and stop ---
+# Everything below this point builds figures. In headless mode none of it runs,
+# so no comparison is attempted and nothing is written to plots/.
+if HEADLESS:
+    print_summary_table()
+    sys.exit(0)
+
 # --- Determine layout ---
 # - prefill preset: the benchmark plots (overlay, speedup-vs-context, TPOT) are
 #   degenerate at out_tokens=32, so swap them out for the new prefill-aware
@@ -677,6 +708,8 @@ if ax_phase is not None:
     plot_phase_decomp_bars(ax_phase)
 
 plt.tight_layout()
+
+print_summary_table()
 
 # --- Save individual plots ---
 os.makedirs(PLOT_DIR, exist_ok=True)

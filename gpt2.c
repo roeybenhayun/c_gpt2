@@ -135,30 +135,48 @@ void top_k_sample(act_t *probs, int v_size, int k,
         k = v_size;
     }
 
-    // Declare a local (stack-allocated) array of TokenProb structs.
-    // This is valid in C99 as a Variable Length Array (VLA) if vocab_size
-    // is not a compile-time constant, but for large vocab_size (like 50257),
-    // this can cause stack overflow. For robustness, global/static or dynamic
-    // allocation (malloc) is usually preferred for very large arrays.
-    // However, adhering to the "no dynamic allocation" constraint:
-    TokenProb token_probs_list[v_size];
-
-    // 1. Populate the list of (probability, original_index) pairs
+    // 1-3. Select the top K directly, in one pass over the vocabulary.
+    //
+    // This used to materialise all v_size (probability, index) pairs and qsort
+    // the lot to read off 40 of them. On GPT-2 Large that cost ~2.8 ms per
+    // token — ~17% of the whole decode budget — to sort 50257 entries and throw
+    // away 50217 of them.
+    //
+    // Instead keep the running top K in the caller's output arrays, held in
+    // descending probability order by insertion. Once K entries are held, an
+    // element that does not beat the tail cannot make the cut and is skipped
+    // after a single compare, so the common case is one float compare per
+    // vocabulary entry. The result is ordered exactly as the qsort left it,
+    // which the caller's cumulative-probability sampling loop relies on.
+    //
+    // Ties: an element equal to one already held is kept after it (and an
+    // element equal to the tail is dropped), so ties resolve toward the lower
+    // token index. qsort's ordering for ties was unspecified, so this is a
+    // tightening rather than a behaviour change.
+    int n_selected = 0;
     for (int i = 0; i < v_size; i++) {
-        token_probs_list[i].prob = probs[i];
-        token_probs_list[i].index = i;
+        float p = (float)probs[i];
+
+        if (n_selected == k && !(p > (float)top_k_probs_out[n_selected - 1])) {
+            continue;
+        }
+
+        // Slot to open up: append while the array is still filling, otherwise
+        // overwrite the tail (which p is known to beat).
+        int pos = (n_selected < k) ? n_selected : k - 1;
+        while (pos > 0 && (float)top_k_probs_out[pos - 1] < p) {
+            top_k_probs_out[pos]   = top_k_probs_out[pos - 1];
+            top_k_indices_out[pos] = top_k_indices_out[pos - 1];
+            pos--;
+        }
+        top_k_probs_out[pos]   = probs[i];
+        top_k_indices_out[pos] = i;
+        if (n_selected < k) n_selected++;
     }
 
-    // 2. Sort the list in descending order of probabilities
-    // qsort modifies the array in-place.
-    qsort(token_probs_list, v_size, sizeof(TokenProb), compareTokenProbs);
-
-    // 3. Extract the top K tokens and their probabilities
     float sum_top_k_probs = 0.0f;
-    for (int i = 0; i < k; i++) {
-        top_k_indices_out[i] = token_probs_list[i].index;
-        top_k_probs_out[i] = token_probs_list[i].prob;
-        sum_top_k_probs += token_probs_list[i].prob;
+    for (int i = 0; i < n_selected; i++) {
+        sum_top_k_probs += (float)top_k_probs_out[i];
     }
 
     // 4. Renormalize the probabilities of the top K tokens
@@ -355,6 +373,60 @@ static void dot_2d_gpu(act_t *a,int a_r, int a_c, int lda, act_t *b,int b_r,int 
             "  dims: a[%d x %d] lda=%d  b[%d x %d] ldb=%d  c[%d x %d] ldc=%d  trans_b=%d\n"
             "  cublas: M=%d N=%d K=%d\n",
             stat, a_r, a_c, lda, b_r, b_c, ldb, c_r, c_c, ldc, transpose_b, M, N, K);
+        abort();
+    }
+}
+
+/* Batched form of dot_2d_gpu for decode attention, where the same GEMM shape
+ * repeats once per head with a uniform stride between heads.
+ *
+ * Decode issued 20 score GEMVs + 20 context GEMVs per layer = 1440 launches per
+ * token on Large, 1.78 ms of kernel time for matrices far too small to saturate
+ * anything -- the cost was the launches, not the arithmetic.
+ *
+ * The operand mapping is identical to dot_2d_gpu (same row-major-expressed-as-
+ * column-major operand swap: C = A*B in row-major is computed as C^T = B^T*A^T,
+ * which is why b/ldb is passed first and a/lda second). Each operand gains a
+ * stride in elements between consecutive batch items.
+ */
+static void dot_2d_gpu_batched(act_t *a, int a_r, int a_c, int lda, long long stride_a,
+                               act_t *b, int b_r, int b_c, int ldb, long long stride_b,
+                               act_t *c_out, int c_r, int c_c, int ldc, long long stride_c,
+                               int batch_count, int transpose_b, int apply_attention_scaling) {
+    cublasHandle_t handle = get_cublas_handle();
+
+    float alpha = 1.0f;
+    if (apply_attention_scaling) {
+        alpha = 1.0f / sqrtf((float)a_c);
+    }
+    const float beta = 0.0f;
+
+    const int M = a_r;
+    const int K = a_c;
+    const int N = transpose_b ? b_r : b_c;
+
+    const cublasOperation_t opB = transpose_b ? CUBLAS_OP_T : CUBLAS_OP_N;
+    const cublasOperation_t opA = CUBLAS_OP_N;
+
+    cublasStatus_t stat = cublasGemmStridedBatchedEx(
+        handle, opB, opA, N, M, K,
+        &alpha,
+        b, GEMM_DATA_TYPE, ldb, stride_b,
+        a, GEMM_DATA_TYPE, lda, stride_a,
+        &beta,
+        c_out, GEMM_DATA_TYPE, ldc, stride_c,
+        batch_count,
+        CUBLAS_COMPUTE_32F,
+        CUBLAS_GEMM_DEFAULT);
+
+    if (stat != CUBLAS_STATUS_SUCCESS) {
+        fprintf(stderr,
+            "FATAL: cublasGemmStridedBatchedEx failed with status %d\n"
+            "  a[%d x %d] lda=%d stride=%lld   b[%d x %d] ldb=%d stride=%lld\n"
+            "  c[%d x %d] ldc=%d stride=%lld   batch=%d trans_b=%d\n"
+            "  cublas: M=%d N=%d K=%d\n",
+            stat, a_r, a_c, lda, stride_a, b_r, b_c, ldb, stride_b,
+            c_r, c_c, ldc, stride_c, batch_count, transpose_b, M, N, K);
         abort();
     }
 }
@@ -699,6 +771,14 @@ weight_t (*wpe_d)[d_model];
 
 /***  Attention (per-layer) ***/
 weight_t (*W_q_d)[d_model][d_model];
+#if !defined(USE_INT8)
+/* Fused Q|K|V projection weight and bias, built once at load time by
+ * concatenating W_q/W_k/W_v along the output dimension. Lets the three
+ * per-layer GEMMs collapse into one. */
+weight_t (*W_qkv_d)[3*d_model][d_model];
+weight_t (*b_qkv_d)[3*d_model];
+act_t (*QKV_scratch_d)[3*d_model];
+#endif
 weight_t (*W_k_d)[d_model][d_model];
 weight_t (*W_v_d)[d_model][d_model];
 weight_t (*b_q_d)[d_model];
@@ -812,6 +892,8 @@ act_t final_attention_output[ctx_len][d_model] = {};
 
 
 typedef struct{
+    weight_t * W_qkv;   /* fused [3*d_model, d_model]; GPU non-INT8 path */
+    weight_t * b_qkv;   /* fused [3*d_model] */
     weight_t * W_q;
     weight_t * W_k;
     weight_t * W_v;
@@ -866,6 +948,11 @@ static void allocate_weights_gpu(void){
     CUDA_CHECK(cudaMalloc((void **)&wpe_d, ctx_len * sizeof *wpe_d));
     CUDA_CHECK(cudaMalloc((void **)&wte_T_d, d_model * sizeof *wte_T_d));
 
+#if !defined(USE_INT8)
+    CUDA_CHECK(cudaMalloc((void **)&W_qkv_d, num_layers * sizeof *W_qkv_d));
+    CUDA_CHECK(cudaMalloc((void **)&b_qkv_d, num_layers * sizeof *b_qkv_d));
+    CUDA_CHECK(cudaMalloc((void **)&QKV_scratch_d, ctx_len * sizeof *QKV_scratch_d));
+#endif
     CUDA_CHECK(cudaMalloc((void **)&W_q_d, num_layers * sizeof *W_q_d));
     CUDA_CHECK(cudaMalloc((void **)&W_k_d, num_layers * sizeof *W_k_d));
     CUDA_CHECK(cudaMalloc((void **)&W_v_d, num_layers * sizeof *W_v_d));
@@ -1040,6 +1127,10 @@ static void allocate_weights_cpu(void){
 static void update_layer_table(void){
 #ifdef USE_CUDA
     for (int l=0; l < num_layers ; l++){
+#if !defined(USE_INT8)
+        layer[l].W_qkv = &W_qkv_d[l][0][0];
+        layer[l].b_qkv = &b_qkv_d[l][0];
+#endif
         layer[l].W_q = &W_q_d[l][0][0];
         layer[l].W_k = &W_k_d[l][0][0];
         layer[l].W_v = &W_v_d[l][0][0];
@@ -1142,29 +1233,30 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
     // QKV
             
     
+    act_t* k_cache_ptr = &K_cache_d[layer_id][cache_start_index][0];
+    act_t* v_cache_ptr = &V_cache_d[layer_id][cache_start_index][0];
+
 #if defined(USE_INT8)
     dot_2d_gpu_int8(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_q_int8,d_model,d_model,d_model,tbp->W_q_scale,&Q_d[cache_start_index][0],n_new_tokens,d_model,d_model);
-#else
-    dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_q,d_model,d_model,d_model,&Q_d[cache_start_index][0],n_new_tokens, d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-#endif
     add_bias_cuda(&Q_d[cache_start_index][0],n_new_tokens,d_model,tbp->b_q,NULL);
-    // final destination pointer in the cache
-
-    act_t* k_cache_ptr = &K_cache_d[layer_id][cache_start_index][0];
-#if defined(USE_INT8)
     dot_2d_gpu_int8(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_k_int8,d_model,d_model,d_model,tbp->W_k_scale,k_cache_ptr,n_new_tokens,d_model,d_model);
-#else
-    dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_k,d_model,d_model,d_model,k_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-#endif
     add_bias_cuda(k_cache_ptr,n_new_tokens,d_model,tbp->b_k,NULL);
-
-    act_t* v_cache_ptr = &V_cache_d[layer_id][cache_start_index][0];
-#if defined(USE_INT8)
     dot_2d_gpu_int8(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_v_int8,d_model,d_model,d_model,tbp->W_v_scale,v_cache_ptr,n_new_tokens,d_model,d_model);
-#else
-    dot_2d(&X_norm_d[cache_start_index][0],n_new_tokens,d_model,d_model,tbp->W_v,d_model,d_model,d_model,v_cache_ptr,n_new_tokens,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
-#endif
     add_bias_cuda(v_cache_ptr,n_new_tokens,d_model,tbp->b_v,NULL);
+#else
+    /* Fused Q|K|V: one [3*d_model, d_model] GEMM into a packed scratch, then a
+     * single kernel that adds the bias and scatters into Q / K-cache / V-cache.
+     * 2 launches per layer instead of 6 (3 GEMMs + 3 add_bias), and the larger
+     * matrix uses the memory system better than three [d_model x d_model] ones,
+     * which the profile showed running at only ~50% of peak bandwidth. */
+    dot_2d(&X_norm_d[cache_start_index][0], n_new_tokens, d_model, d_model,
+           tbp->W_qkv, 3*d_model, d_model, d_model,
+           &QKV_scratch_d[0][0], n_new_tokens, 3*d_model, 3*d_model,
+           1, !APPLY_ATTENTION_SCALING);
+    qkv_bias_scatter_cuda(&QKV_scratch_d[0][0], tbp->b_qkv,
+                          &Q_d[cache_start_index][0], k_cache_ptr, v_cache_ptr,
+                          n_new_tokens, d_model, d_model);
+#endif
     
     last_index = n_tokens;
  
@@ -1179,6 +1271,50 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
     /// To optimize this loop. No need to recompute entire attention matrix at every single
     // step. Need to calc attention for the last token only during the generation 
     // phase. which means calc 1xn_tokens instead of n_tokens x n_tokens matrix
+    if(n_new_tokens == 1){
+        /* Decode phase: one query row per head.
+         *
+         * This used to run scores -> softmax -> context head by head, which
+         * launched softmax_cuda once per (layer x head): 20 heads x 36 layers =
+         * 720 launches per token on Large. Profiling put softmax_kernel at 19.4%
+         * of all GPU time for ~2 us of work per launch — essentially pure launch
+         * overhead.
+         *
+         * The three stages are split into three passes instead, so the softmax
+         * for every head goes out in a single launch (36 per token, not 720).
+         * Each head gets its own row of the scores/weights scratch rather than
+         * all heads sharing row (n_tokens-1); softmax_kernel is one block per
+         * row, so rows = nof_heads batches the heads with no kernel change.
+         *
+         * scores_h_d / weights_h_d are [ctx_len][ctx_len] and nof_heads is 20
+         * for the largest GPT-2, so the head rows always fit. */
+        _Static_assert(nof_heads <= ctx_len,
+                       "decode attention stores one score row per head in scores_h_d");
+
+        // 1. Scores, all heads in one batched GEMM:
+        //    Q_last[h] dot K_all[h] -> [1 x head_dim] @ [head_dim x n_tokens]
+        //    Head h's Q and K slices are h*head_dim into a d_model-wide row, and
+        //    its score row is row h of scores_h_d — all three strides uniform.
+        dot_2d_gpu_batched(&Q_d[n_tokens - 1][0], 1, head_dim, d_model, head_dim,
+                           &K_cache_d[layer_id][0][0], n_tokens, head_dim, d_model, head_dim,
+                           &scores_h_d[0][0], 1, n_tokens, ctx_len, ctx_len,
+                           nof_heads, 1, APPLY_ATTENTION_SCALING);
+
+        // 2. Softmax over every head's row in one launch. No causal mask: each
+        //    row is the newest token, which attends to all prior tokens.
+        softmax_cuda(&scores_h_d[0][0], nof_heads, n_tokens, ctx_len,
+                     &weights_h_d[0][0], 1.0f, /*causal_mask=*/0);
+
+        // 3. Context, all heads in one batched GEMM:
+        //    Weights[h] dot V_all[h] -> [1 x n_tokens] @ [n_tokens x head_dim]
+        //    context_heads_d is [nof_heads][ctx_len][head_dim], so consecutive
+        //    heads are ctx_len*head_dim apart at a fixed token row.
+        dot_2d_gpu_batched(&weights_h_d[0][0], 1, n_tokens, ctx_len, ctx_len,
+                           &V_cache_d[layer_id][0][0], n_tokens, head_dim, d_model, head_dim,
+                           &context_heads_d[0][0][0] + (n_tokens - 1) * head_dim,
+                           1, head_dim, head_dim, (long long)ctx_len * head_dim,
+                           nof_heads, 0, !APPLY_ATTENTION_SCALING);
+    } else {
     for (int h=0 ; h < nof_heads; h++){
         act_t *q_h;
         act_t *k_h;
@@ -1188,20 +1324,7 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
         k_h = &K_cache_d[layer_id][0][0]+ h * head_dim;
         v_h = &V_cache_d[layer_id][0][0]+ h * head_dim;
 
-        if(n_new_tokens == 1){
-            act_t* q_last_token_h = &Q_d[n_tokens - 1][0] + h * head_dim;
-            act_t* scores_last_row = &scores_h_d[n_tokens - 1][0];
-            act_t* weights_last_row = &weights_h_d[n_tokens - 1][0];
-            act_t* context_last_row = context_h_out + (n_tokens - 1) * head_dim;
-             // 1. Calculate scores: Q_last dot K_all -> [1 x head_dim] @ [head_dim x n_tokens] = [1 x n_tokens]
-            dot_2d(q_last_token_h, 1, head_dim, d_model, k_h, n_tokens, head_dim, d_model, scores_last_row, 1, n_tokens, ctx_len, 1, APPLY_ATTENTION_SCALING);
-            
-            // Causal mask is implicit up to n_tokens-1, no need to apply for the last row.
-            // 2. Softmax on the single row of scores (no causal mask: the single row attends to all prior tokens)
-            softmax_cuda(scores_last_row, 1, n_tokens, ctx_len, weights_last_row, 1.0f, /*causal_mask=*/0);
-            // 3. Calculate context: Weights_last dot V_all -> [1 x n_tokens] @ [n_tokens x head_dim] = [1 x head_dim]
-            dot_2d(weights_last_row, 1, n_tokens, ctx_len, v_h, n_tokens, head_dim, d_model, context_last_row, 1, head_dim, head_dim, 0, !APPLY_ATTENTION_SCALING);
-        } else {
+        {
             // prefill
             q_h = &Q_d[0][0]+ h * head_dim;
             dot_2d(q_h,n_tokens,head_dim,d_model,k_h,n_tokens,head_dim,d_model,&scores_h_d[0][0],n_tokens,n_tokens,ctx_len,1,APPLY_ATTENTION_SCALING);
@@ -1216,6 +1339,7 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
             dot_2d(&weights_h_d[0][0],n_tokens,n_tokens,ctx_len,v_h,n_tokens,head_dim,d_model,context_h_out,n_tokens,head_dim,head_dim,0,!APPLY_ATTENTION_SCALING);
         }
                                
+    }
     }
 
     if(n_new_tokens == 1){
@@ -1238,11 +1362,12 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
         dot_2d(&final_attention_output_d[i][0],1,d_model,d_model,tbp->attn_proj_weight,d_model,d_model,d_model,&context_d[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
 #endif
 
-        // Attn projection bias
-        add_bias_cuda(&context_d[i][0],1,d_model,tbp->attn_proj_bias,NULL);
-
-        // 3. Residual connection
-        add_2d_cuda(input + (i * d_model),1,d_model,&context_d[i][0],&residual_out_d[i][0]);
+        // Attn projection bias + residual connection, fused into one pass.
+        // Was add_bias_cuda then add_2d_cuda: two launches, and the biased
+        // projection made a pointless round trip through HBM between them.
+        add_bias_residual_cuda(&context_d[i][0], tbp->attn_proj_bias,
+                               input + (i * d_model), &residual_out_d[i][0],
+                               1, d_model);
 
 
         // 4. Layer Norm 2 (on the last token only)
@@ -1256,9 +1381,9 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
         dot_2d(&X_norm2_d[i][0],1,d_model,d_model,tbp->W1,d_ff,d_model,d_model,&X1_out_d[i][0],1,d_ff,d_ff,1,!APPLY_ATTENTION_SCALING);
 #endif
         // W1 bias
-        add_bias_cuda(&X1_out_d[i][0],1,d_ff,tbp->b1,NULL);
-        // GELU activation
-        gelu_cuda(&X1_out_d[i][0],d_ff,1,NULL);
+        // W1 bias + GELU, fused into one pass. Separately these wrote and then
+        // re-read the full [1 x d_ff] activation, the widest in the layer.
+        bias_gelu_cuda(&X1_out_d[i][0], tbp->b1, 1, d_ff);
         // W2
 #if defined(USE_INT8)
         dot_2d_gpu_int8(&X1_out_d[i][0],1,d_ff,d_ff,tbp->W2_int8,d_model,d_ff,d_ff,tbp->W2_scale,&X2_out_d[i][0],1,d_model,d_model);
@@ -1266,17 +1391,28 @@ static void transformer_block_gpu(act_t *input,int n_tokens,int n_new_tokens,
         dot_2d(&X1_out_d[i][0],1,d_ff,d_ff,tbp->W2,d_model,d_ff,d_ff,&X2_out_d[i][0],1,d_model,d_model,1,!APPLY_ATTENTION_SCALING);
 #endif
         // W2 bias
-        add_bias_cuda(&X2_out_d[i][0],1,d_model,tbp->b2,NULL);
+
 
         // 6. Final Residual Connection (for the last token only)
-        // First, preserve the state of previous tokens by copying them over
-        if (i > 0) {
-            cudaMemcpy(&residual2_out_d[0][0], input, i * d_model * sizeof(act_t), cudaMemcpyDeviceToDevice);
-            //memcpy(&residual2_out[0][0], input, i * d_model * sizeof(float));
-        }
-        // Then, calculate the new residual for the last token /////CUDA is missing///
-        //add_2d(&X2_out[0][0],n_tokens,d_model,&residual_out[0][0],&residual2_out[0][0]);
-        add_2d_cuda(&residual_out_d[i][0], 1, d_model, &X2_out_d[i][0], &residual2_out_d[i][0]);
+        //
+        // A blocking cudaMemcpy used to copy rows 0..i-1 of `input` into
+        // residual2_out_d here, to "preserve the state of previous tokens".
+        // It was dead work during decode, twice over:
+        //
+        //   * From layer 1 on, current_hidden_state_d IS &residual2_out_d[0][0]
+        //     (see the layer loop), so src == dst — a self-copy.
+        //   * Nothing reads those rows. Within a layer only row i is touched
+        //     (LN1 runs on n_new_tokens rows from cache_start_index, and the
+        //     residual reads input + i*d_model), and the final LayerNorm reads
+        //     only last_token_position. Token history lives in the KV caches,
+        //     not here.
+        //
+        // It cost up to 2 MB per layer, ~72 MB per token on Large, and 36
+        // synchronous D2D copies per token that stalled the pipeline.
+        // W2 bias + residual, fused (see the attention join above).
+        add_bias_residual_cuda(&X2_out_d[i][0], tbp->b2,
+                               &residual_out_d[i][0], &residual2_out_d[i][0],
+                               1, d_model);
 
     } else {
         // prefill phase — run the post-attention pipeline for all n_tokens rows
@@ -1655,6 +1791,24 @@ static void copy_weights_to_gpu(void){
     CUDA_CHECK(cudaMemcpy(b_q_d,  b_q, num_layers * sizeof (*b_q_d),cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(b_k_d,  b_k, num_layers * sizeof (*b_k_d),cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(b_v_d,  b_v, num_layers * sizeof (*b_v_d),cudaMemcpyHostToDevice));
+
+#if !defined(USE_INT8)
+    /* Build the fused Q|K|V weight and bias from the tensors just uploaded.
+     * Device-to-device so it costs nothing on the host side, and it happens
+     * once at load. W_q/W_k/W_v stay allocated (the INT8 and CPU paths and the
+     * layer table still reference them); the fused copy costs an extra
+     * 3*d_model*d_model*num_layers weights of VRAM. */
+    for (int l = 0; l < num_layers; l++) {
+        const size_t w_bytes = (size_t)d_model * d_model * sizeof(weight_t);
+        const size_t b_bytes = (size_t)d_model * sizeof(weight_t);
+        CUDA_CHECK(cudaMemcpy(&W_qkv_d[l][0][0],             &W_q_d[l][0][0], w_bytes, cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(&W_qkv_d[l][d_model][0],       &W_k_d[l][0][0], w_bytes, cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(&W_qkv_d[l][2*d_model][0],     &W_v_d[l][0][0], w_bytes, cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(&b_qkv_d[l][0],                &b_q_d[l][0],    b_bytes, cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(&b_qkv_d[l][d_model],          &b_k_d[l][0],    b_bytes, cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(&b_qkv_d[l][2*d_model],        &b_v_d[l][0],    b_bytes, cudaMemcpyDeviceToDevice));
+    }
+#endif
 
     CUDA_CHECK(cudaMemcpy(layer_norm1_gamma_d,  layer_norm1_gamma, num_layers * sizeof (*layer_norm1_gamma_d),cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(layer_norm1_beta_d,  layer_norm1_beta, num_layers * sizeof (*layer_norm1_beta_d),cudaMemcpyHostToDevice));
