@@ -181,7 +181,7 @@ The lesson generalizes: a fused kernel is not numerically neutral, and "the outp
 
 ## Where else this might fit
 
-What made the loop work here is that performance optimization comes with its own scoreboard: a number to move, a verified baseline, and a correctness gate that makes a bad change obvious within a single measurement. I am curious which other domains have that shape — anything with a metric worth moving and a cheap way to check it — and whether they would run better through the Claude Code plugin or in Huntley's original fresh-context form.
+I am curious which other domains this method could work in — and whether they would run better through the Claude Code plugin or in Huntley's original fresh-context form.
 
 ## See also
 
